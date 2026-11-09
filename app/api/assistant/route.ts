@@ -838,7 +838,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Message string is required" }, { status: 400 });
   }
 
-  const apiKey = process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY || "";
+  const rawKey = process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY || "";
+  // Sanitize key: eliminate any accidental newlines, duplicate lines or carriage returns
+  const apiKey = rawKey
+    .split(/[\r\n]+/)
+    .map((k) => k.trim())
+    .find((k) => k.startsWith("gsk_") || k.startsWith("sk-")) || "";
 
   const systemPrompt = `You are the AI Operations Intelligence Copilot for the Smart Roster Management System.
 You are directly connected to the LIVE PostgreSQL database and deterministic scheduling graph.
@@ -860,30 +865,14 @@ Operational Intelligence Directives:
 
     // Real OpenAI-compatible Function Calling Loop using Groq (gpt-oss-120b / qwen3.8-27b)
     if (apiKey) {
-      const messages: any[] = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message },
-      ];
+      try {
+        const messages: any[] = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message },
+        ];
 
-      let modelChoice = "openai/gpt-oss-120b";
-      let firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: modelChoice,
-          messages,
-          tools: toolsDefinition,
-          tool_choice: "auto",
-          temperature: 0.2,
-        }),
-      });
-
-      if (!firstRes.ok) {
-        modelChoice = "qwen/qwen3.8-27b";
-        firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        let modelChoice = "openai/gpt-oss-120b";
+        let firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -897,42 +886,10 @@ Operational Intelligence Directives:
             temperature: 0.2,
           }),
         });
-      }
 
-      if (firstRes.ok) {
-        const firstData = await firstRes.json();
-        const assistantMsg = firstData.choices?.[0]?.message;
-
-        if (assistantMsg?.tool_calls && assistantMsg.tool_calls.length > 0) {
-          messages.push(assistantMsg);
-
-          for (const call of assistantMsg.tool_calls) {
-            const funcName = call.function.name;
-            let parsedArgs: any = {};
-            try {
-              parsedArgs = JSON.parse(call.function.arguments || "{}");
-            } catch {}
-
-            toolUsed = funcName;
-            const res = await executeTool(
-              funcName,
-              { ...parsedArgs, month },
-              user!.role,
-              user!.employeeId,
-              user!.id
-            );
-            toolResult = res;
-            if (res?.systemReflected) systemReflected = true;
-
-            messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: JSON.stringify(res),
-            });
-          }
-
-          // Second pass: Model synthesizes live database records into a genuine, real response
-          const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        if (!firstRes.ok) {
+          modelChoice = "qwen/qwen3.8-27b";
+          firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: {
               Authorization: `Bearer ${apiKey}`,
@@ -941,17 +898,69 @@ Operational Intelligence Directives:
             body: JSON.stringify({
               model: modelChoice,
               messages,
+              tools: toolsDefinition,
+              tool_choice: "auto",
               temperature: 0.2,
             }),
           });
-
-          if (secondRes.ok) {
-            const secondData = await secondRes.json();
-            replyText = secondData.choices?.[0]?.message?.content || "";
-          }
-        } else if (assistantMsg?.content) {
-          replyText = assistantMsg.content;
         }
+
+        if (firstRes.ok) {
+          const firstData = await firstRes.json();
+          const assistantMsg = firstData.choices?.[0]?.message;
+
+          if (assistantMsg?.tool_calls && assistantMsg.tool_calls.length > 0) {
+            messages.push(assistantMsg);
+
+            for (const call of assistantMsg.tool_calls) {
+              const funcName = call.function.name;
+              let parsedArgs: any = {};
+              try {
+                parsedArgs = JSON.parse(call.function.arguments || "{}");
+              } catch {}
+
+              toolUsed = funcName;
+              const res = await executeTool(
+                funcName,
+                { ...parsedArgs, month },
+                user!.role,
+                user!.employeeId,
+                user!.id
+              );
+              toolResult = res;
+              if (res?.systemReflected) systemReflected = true;
+
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: JSON.stringify(res),
+              });
+            }
+
+            // Second pass: Model synthesizes live database records into a genuine, real response
+            const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: modelChoice,
+                messages,
+                temperature: 0.2,
+              }),
+            });
+
+            if (secondRes.ok) {
+              const secondData = await secondRes.json();
+              replyText = secondData.choices?.[0]?.message?.content || "";
+            }
+          } else if (assistantMsg?.content) {
+            replyText = assistantMsg.content;
+          }
+        }
+      } catch (fetchErr) {
+        console.warn("External LLM fetch exception, using deterministic fallback:", fetchErr);
       }
     }
 
