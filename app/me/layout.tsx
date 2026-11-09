@@ -7,35 +7,44 @@ import { Calendar, User, LogOut } from "lucide-react";
 
 export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans antialiased text-slate-900">
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <Link href="/me" className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-cyan-600 flex items-center justify-center text-white shadow-md shadow-cyan-600/30">
+          <Link href="/me" className="flex items-center gap-2.5 group">
+            <div className="w-9 h-9 rounded-xl bg-cyan-600 flex items-center justify-center text-white shadow-sm shadow-cyan-600/30 group-hover:scale-105 transition-transform">
               <Calendar className="w-5 h-5" />
             </div>
             <div>
-              <span className="font-bold text-slate-900 text-sm tracking-tight block">
-                Smart Roster
-              </span>
-              <span className="text-[10px] text-cyan-600 uppercase tracking-wider block font-semibold">
-                Employee Portal
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold text-slate-900 text-sm tracking-tight block">
+                  Smart Roster
+                </span>
+                <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-cyan-50 text-cyan-700 border border-cyan-200/60">
+                  Employee
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-400 font-medium block">
+                My Shift Schedule & Leaves
               </span>
             </div>
           </Link>
 
-          <div className="flex items-center gap-3">
-            <div className="px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700">
-              November 2026
+          <div className="flex items-center gap-2.5">
+            <div className="px-3 py-1 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-1.5 shadow-xs">
+              <Calendar className="w-3.5 h-3.5 text-cyan-600" />
+              <span>November 2026</span>
             </div>
 
-            <button
-              onClick={() => signOut({ callbackUrl: "/login" })}
-              className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-              title="Sign Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
+              <button
+                onClick={() => signOut({ callbackUrl: "/login" })}
+                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
+                title="Sign Out"
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -44,4 +53,3 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
     </div>
   );
 }
-

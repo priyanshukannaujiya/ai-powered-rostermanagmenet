@@ -38,7 +38,7 @@ export async function GET(
     const rosterMonth = monthRows[0] || null;
 
     // 2. Fetch roster days
-    const days = rosterMonth
+    const daysRaw = rosterMonth
       ? await sql`
           SELECT rd.*, bp.brand_id, bp.process_id, b.name as brand_name, p.code as process_code
           FROM roster_days rd
@@ -50,8 +50,13 @@ export async function GET(
         `
       : [];
 
+    const days = daysRaw.map((rd: any) => ({
+      ...rd,
+      date: formatDateOnly(rd.date),
+    }));
+
     // 3. Fetch conflicts
-    const conflictsList = rosterMonth
+    const conflictsRaw = rosterMonth
       ? await sql`
           SELECT c.*, b.name as brand_name, p.code as process_code, e.name as employee_name
           FROM conflicts c
@@ -63,6 +68,11 @@ export async function GET(
           ORDER BY c.severity DESC, c.date ASC;
         `
       : [];
+
+    const conflictsList = conflictsRaw.map((c: any) => ({
+      ...c,
+      date: c.date ? formatDateOnly(c.date) : null,
+    }));
 
     // 4. Fetch metadata for UI filters and dropdowns
     const employees = await sql`
@@ -81,9 +91,14 @@ export async function GET(
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id;
     `;
+    const [yStr, mStr] = month.split("-");
+    const lastDayOfMonth = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0).getDate();
+    const startDateStr = `${month}-01`;
+    const endDateStr = `${month}-${String(lastDayOfMonth).padStart(2, "0")}`;
+
     const holidays = await sql`
       SELECT * FROM holidays
-      WHERE date >= ${`${month}-01`} AND date <= ${`${month}-31`}
+      WHERE date >= ${startDateStr} AND date <= ${endDateStr}
       ORDER BY date ASC;
     `;
 
@@ -123,13 +138,10 @@ export async function POST(
   const sql = neon(process.env.DATABASE_URL!);
 
   try {
-    // Check if month is already published
+    // Check if month already exists; if published, reset status to draft for fresh solve
     const existingMonth = await sql`SELECT * FROM roster_months WHERE month = ${month} LIMIT 1;`;
     if (existingMonth.length > 0 && existingMonth[0].status === "published") {
-      return NextResponse.json(
-        { error: "Cannot regenerate a published roster. Unpublish or edit cells manually." },
-        { status: 400 }
-      );
+      await sql`UPDATE roster_months SET status = 'draft', updated_at = now() WHERE month = ${month};`;
     }
 
     // Fetch master data needed for scheduler
@@ -140,11 +152,16 @@ export async function POST(
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id;
     `;
+    const [postYStr, postMStr] = month.split("-");
+    const postLastDay = new Date(parseInt(postYStr, 10), parseInt(postMStr, 10), 0).getDate();
+    const postStartStr = `${month}-01`;
+    const postEndStr = `${month}-${String(postLastDay).padStart(2, "0")}`;
+
     const asgnRaw = await sql`SELECT * FROM assignments;`;
     const woRaw = await sql`SELECT * FROM weekly_offs;`;
-    const holRaw = await sql`SELECT * FROM holidays WHERE date >= ${`${month}-01`} AND date <= ${`${month}-31`};`;
-    const leavesRaw = await sql`SELECT * FROM leaves WHERE status = 'approved' AND end_date >= ${`${month}-01`} AND start_date <= ${`${month}-31`};`;
-    const compOffsRaw = await sql`SELECT * FROM comp_offs WHERE date >= ${`${month}-01`} AND date <= ${`${month}-31`};`;
+    const holRaw = await sql`SELECT * FROM holidays WHERE date >= ${postStartStr} AND date <= ${postEndStr};`;
+    const leavesRaw = await sql`SELECT * FROM leaves WHERE status = 'approved' AND end_date >= ${postStartStr} AND start_date <= ${postEndStr};`;
+    const compOffsRaw = await sql`SELECT * FROM comp_offs WHERE date >= ${postStartStr} AND date <= ${postEndStr};`;
 
     const employees: EmployeeInfo[] = employeesRaw.map((e: any) => ({
       id: e.id,

@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { z } from "zod";
+import { formatDateOnly } from "@/lib/date-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +57,13 @@ export async function GET(req: NextRequest) {
       `;
     }
 
-    return NextResponse.json({ leaves: leavesList });
+    const formattedLeaves = leavesList.map((l: any) => ({
+      ...l,
+      start_date: formatDateOnly(l.start_date),
+      end_date: formatDateOnly(l.end_date),
+    }));
+
+    return NextResponse.json({ leaves: formattedLeaves });
   } catch (error: any) {
     console.error("Fetch leaves error:", error);
     return NextResponse.json({ error: error.message || "Failed to load leaves" }, { status: 500 });

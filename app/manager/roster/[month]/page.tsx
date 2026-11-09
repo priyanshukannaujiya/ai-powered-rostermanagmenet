@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import useSWR from "swr";
+import { useRouter } from "next/navigation";
 import {
   Calendar,
   Filter,
@@ -15,12 +16,24 @@ import {
   Clock,
   ChevronRight,
   Info,
+  Search,
+  Sparkles,
+  User,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Modal } from "@/components/ui/Modal";
+import { MonthPicker } from "@/components/ui/MonthPicker";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { formatMonthYear, parseDateString, cn } from "@/lib/utils";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function RosterGridPage({ params }: { params: { month: string } }) {
+  const router = useRouter();
   const month = params.month || "2026-11";
   const { showToast } = useToast();
 
@@ -35,9 +48,9 @@ export default function RosterGridPage({ params }: { params: { month: string } }
 
   // Filters
   const [selectedPod, setSelectedPod] = useState<string>("ALL");
-  const [selectedBrand, setSelectedBrand] = useState<string>("ALL");
-  const [selectedProcess, setSelectedProcess] = useState<string>("ALL");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [searchEmployee, setSearchEmployee] = useState<string>("");
+  const [generating, setGenerating] = useState<boolean>(false);
 
   // Edit Modal State
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -66,6 +79,15 @@ export default function RosterGridPage({ params }: { params: { month: string } }
     return () => clearInterval(timer);
   }, []);
 
+  // Listen for live AI updates or cross-tab replan changes
+  useEffect(() => {
+    const handleRefresh = () => {
+      mutate();
+    };
+    window.addEventListener("roster:refresh", handleRefresh);
+    return () => window.removeEventListener("roster:refresh", handleRefresh);
+  }, [mutate]);
+
   useEffect(() => {
     if (data) {
       setSecondsAgo(0);
@@ -93,26 +115,91 @@ export default function RosterGridPage({ params }: { params: { month: string } }
     return arr;
   }, [month]);
 
-  // Index days by `${employeeId}_${date}`
+  // Index days by `${employeeId}_${date}` with clean date normalization
   const dayGridMap = useMemo(() => {
     const map = new Map<string, any>();
     if (data?.days) {
       for (const d of data.days) {
-        map.set(`${d.employee_id}_${d.date}`, d);
+        const parsed = parseDateString(d.date);
+        const cleanDate = parsed ? parsed.dateStr : String(d.date).slice(0, 10);
+        map.set(`${d.employee_id}_${cleanDate}`, {
+          ...d,
+          date: cleanDate,
+        });
       }
     }
     return map;
   }, [data]);
+
+  // Daily Headcount Totals for Footer (with clean date parsing)
+  const dailyHeadcounts = useMemo(() => {
+    const counts = new Map<string, { working: number; off: number; leave: number }>();
+    for (const d of daysInMonth) {
+      counts.set(d, { working: 0, off: 0, leave: 0 });
+    }
+    if (data?.days) {
+      for (const cell of data.days) {
+        const parsed = parseDateString(cell.date);
+        const cleanDate = parsed ? parsed.dateStr : String(cell.date).slice(0, 10);
+        const current = counts.get(cleanDate);
+        if (current) {
+          if (cell.status === "working") current.working += 1;
+          else if (cell.status === "weekly_off") current.off += 1;
+          else if (cell.status === "leave") current.leave += 1;
+        }
+      }
+    }
+    return counts;
+  }, [data, daysInMonth]);
 
   // Filtered employees list
   const filteredEmployees = useMemo(() => {
     if (!data?.meta?.employees) return [];
     return data.meta.employees.filter((emp: any) => {
       if (selectedPod !== "ALL" && emp.pod_id !== selectedPod) return false;
-      if (searchEmployee.trim() && !emp.name.toLowerCase().includes(searchEmployee.toLowerCase())) return false;
+      if (
+        searchEmployee.trim() &&
+        !emp.name.toLowerCase().includes(searchEmployee.toLowerCase()) &&
+        !emp.email?.toLowerCase().includes(searchEmployee.toLowerCase())
+      )
+        return false;
+      if (statusFilter !== "ALL") {
+        // Check if employee has at least one cell matching statusFilter
+        const hasStatus = daysInMonth.some((d) => {
+          const cell = dayGridMap.get(`${emp.id}_${d}`);
+          return cell?.status === statusFilter;
+        });
+        if (!hasStatus) return false;
+      }
       return true;
     });
-  }, [data, selectedPod, searchEmployee]);
+  }, [data, selectedPod, searchEmployee, statusFilter, daysInMonth, dayGridMap]);
+
+  const handleGenerateRoster = async () => {
+    setGenerating(true);
+    try {
+      const res = await fetch(`/api/roster/${month}`, { method: "POST" });
+      const json = await res.json();
+      if (res.ok) {
+        showToast({
+          type: "success",
+          title: "Roster Solved & Generated",
+          message: `Generated schedule for ${formatMonthYear(month)} with ${json.conflictsCount ?? 0} conflict(s).`,
+        });
+        mutate();
+      } else {
+        showToast({
+          type: "error",
+          title: "Generation Failed",
+          message: json.error || "Failed to generate roster",
+        });
+      }
+    } catch (err: any) {
+      showToast({ type: "error", title: "Network Error", message: err.message });
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleCellClick = (emp: any, date: string) => {
     const cell = dayGridMap.get(`${emp.id}_${date}`);
@@ -136,10 +223,6 @@ export default function RosterGridPage({ params }: { params: { month: string } }
     if (!editingCell) return;
     setSavingEdit(true);
     setEditError("");
-
-    // Optimistic UI state
-    const cellKey = `${editingCell.employeeId}_${editingCell.date}`;
-    const previousDays = data?.days;
 
     try {
       const res = await fetch(`/api/roster/${month}/cell`, {
@@ -170,12 +253,12 @@ export default function RosterGridPage({ params }: { params: { month: string } }
 
       showToast({
         type: "success",
-        title: "Shift Updated",
+        title: "Shift Assignment Saved",
         message: `Updated ${editingCell.employeeName} on ${editingCell.date} to ${newStatus}.`,
       });
 
       setEditModalOpen(false);
-      mutate(); // revalidate
+      mutate();
     } catch (err: any) {
       setEditError(err.message);
     } finally {
@@ -183,20 +266,20 @@ export default function RosterGridPage({ params }: { params: { month: string } }
     }
   };
 
-  const getStatusBadgeClass = (status: string, isPinned?: boolean) => {
+  const getStatusCellStyles = (status: string, isPinned?: boolean) => {
     switch (status) {
       case "working":
-        return "bg-indigo-600 text-white font-medium hover:bg-indigo-700";
+        return "bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow-xs";
       case "weekly_off":
-        return "bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300";
+        return "bg-slate-100 text-slate-600 font-medium hover:bg-slate-200";
       case "leave":
-        return "bg-amber-400 text-amber-950 font-bold hover:bg-amber-500";
+        return "bg-amber-400 text-amber-950 font-bold hover:bg-amber-500 shadow-xs";
       case "holiday":
-        return "bg-rose-100 text-rose-800 font-medium hover:bg-rose-200";
+        return "bg-rose-100 text-rose-800 font-semibold hover:bg-rose-200";
       case "comp_off":
-        return "bg-teal-100 text-teal-800 font-medium hover:bg-teal-200";
+        return "bg-teal-100 text-teal-800 font-semibold hover:bg-teal-200";
       default:
-        return "bg-slate-50 text-slate-400 hover:bg-slate-100";
+        return "bg-slate-50 text-slate-300 hover:bg-slate-100 border border-slate-200/40";
     }
   };
 
@@ -206,7 +289,7 @@ export default function RosterGridPage({ params }: { params: { month: string } }
       case "working":
         return cell.process_code || "W";
       case "weekly_off":
-        return "WO";
+        return "OFF";
       case "leave":
         return "LV";
       case "holiday":
@@ -219,19 +302,43 @@ export default function RosterGridPage({ params }: { params: { month: string } }
   };
 
   return (
-    <div className="space-y-4">
-      {/* Top Filter and Controls Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Filter Dropdowns */}
-        <div className="flex flex-wrap items-center gap-2.5 text-xs">
-          <div className="flex items-center gap-1.5 font-semibold text-slate-700 mr-1">
-            <Filter className="w-3.5 h-3.5" /> Filters:
+    <div className="space-y-4 animate-fade-in font-sans">
+      {/* Top Filter and Toolbar */}
+      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-card flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+        {/* Left Side: Month navigation + Filters */}
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 text-xs">
+          <MonthPicker
+            currentMonth={month}
+            onMonthChange={(newM) => router.push(`/manager/roster/${newM}`)}
+          />
+
+          <div className="h-5 w-px bg-slate-200 hidden sm:block" />
+
+          {/* Search Employee */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search employee..."
+              value={searchEmployee}
+              onChange={(e) => setSearchEmployee(e.target.value)}
+              className="pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs w-44 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all placeholder:text-slate-400"
+            />
+            {searchEmployee && (
+              <button
+                onClick={() => setSearchEmployee("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
+          {/* Pod Filter */}
           <select
             value={selectedPod}
             onChange={(e) => setSelectedPod(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer"
           >
             <option value="ALL">All Pods</option>
             {data?.meta?.pods?.map((p: any) => (
@@ -241,222 +348,330 @@ export default function RosterGridPage({ params }: { params: { month: string } }
             ))}
           </select>
 
-          <input
-            type="text"
-            placeholder="Search employee..."
-            value={searchEmployee}
-            onChange={(e) => setSearchEmployee(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 w-36 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+          {/* Status Filter */}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer"
+          >
+            <option value="ALL">All Statuses</option>
+            <option value="working">Working Only</option>
+            <option value="weekly_off">Weekly Offs</option>
+            <option value="leave">Leaves</option>
+            <option value="holiday">Holidays</option>
+          </select>
+
+          {/* Quick Regenerate action if roster is empty or needs refresh */}
+          <Button
+            onClick={handleGenerateRoster}
+            loading={generating}
+            variant="secondary"
+            size="xs"
+            icon={<RefreshCw className="w-3 h-3" />}
+          >
+            {data?.rosterMonth ? "Regenerate" : "Generate"}
+          </Button>
         </div>
 
-        {/* Status Legend & Real-Time Pulse */}
-        <div className="flex items-center gap-3 text-[11px]">
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-indigo-600 inline-block" /> Working
+        {/* Right Side: Status Legend & Real-Time Sync Indicator */}
+        <div className="flex flex-wrap items-center gap-3 text-[11px] self-start xl:self-auto">
+          <div className="flex items-center gap-2.5">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded bg-indigo-600 inline-block shadow-xs" />
+              <span className="text-slate-600 font-medium">Working</span>
             </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-slate-300 inline-block" /> Weekly Off
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded bg-slate-200 border border-slate-300 inline-block" />
+              <span className="text-slate-600 font-medium">Off</span>
             </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-amber-400 inline-block" /> Leave
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded bg-amber-400 inline-block shadow-xs" />
+              <span className="text-slate-600 font-medium">Leave</span>
             </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-rose-200 inline-block" /> Holiday
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded bg-rose-100 border border-rose-200 inline-block" />
+              <span className="text-slate-600 font-medium">Holiday</span>
             </span>
           </div>
 
-          <div className="text-slate-400 pl-2 border-l border-slate-200 flex items-center gap-1">
-            <Clock className="w-3 h-3" /> {secondsAgo}s ago
+          <div className="text-slate-400 pl-3 border-l border-slate-200 flex items-center gap-1.5 font-mono text-[10px]">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>Synced {secondsAgo}s ago</span>
           </div>
         </div>
       </div>
 
-      {/* Main Roster Grid Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-        <div className="overflow-x-auto max-h-[70vh]">
-          <table className="w-full text-xs text-left border-collapse">
-            <thead className="bg-slate-100/90 text-slate-700 sticky top-0 z-20 backdrop-blur-sm shadow-sm">
-              <tr>
-                <th className="p-3 font-semibold sticky left-0 bg-slate-100 z-30 min-w-[160px] border-r border-slate-200">
-                  Employee
-                </th>
-                <th className="p-3 font-semibold sticky left-[160px] bg-slate-100 z-30 min-w-[120px] border-r border-slate-200 hidden sm:table-cell">
-                  Pod
-                </th>
-                {daysInMonth.map((dateStr) => {
-                  const dayNum = dateStr.slice(8);
-                  const dow = new Date(dateStr).getDay();
-                  const isSun = dow === 0;
-                  const isSat = dow === 6;
-                  return (
-                    <th
-                      key={dateStr}
-                      className={`p-1.5 text-center font-semibold min-w-[42px] border-r border-slate-200/80 ${
-                        isSun ? "bg-amber-50/80 text-amber-900" : isSat ? "bg-slate-50 text-slate-700" : ""
-                      }`}
-                    >
-                      <div className="text-[10px] uppercase text-slate-500">
-                        {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][dow]}
-                      </div>
-                      <div className="font-bold">{dayNum}</div>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredEmployees.map((emp: any) => (
-                <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors">
-                  {/* Fixed Employee Name Column */}
-                  <td className="p-2.5 font-medium text-slate-900 sticky left-0 bg-white z-10 border-r border-slate-200 whitespace-nowrap">
-                    <div className="font-semibold text-xs text-slate-800">{emp.name}</div>
-                    <div className="text-[10px] text-slate-400 truncate max-w-[140px]">{emp.email}</div>
-                  </td>
+      {/* Roster Un-generated Notice Banner */}
+      {data && !data.rosterMonth && (
+        <div className="p-4 bg-amber-50 border border-amber-200/90 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs animate-slide-down">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span className="text-amber-900 font-medium">
+              Roster for <strong>{formatMonthYear(month)}</strong> has not been generated yet. Click to run the constraint solver.
+            </span>
+          </div>
+          <Button
+            onClick={handleGenerateRoster}
+            loading={generating}
+            variant="primary"
+            size="xs"
+            icon={<Sparkles className="w-3.5 h-3.5" />}
+          >
+            Solve & Generate Roster
+          </Button>
+        </div>
+      )}
 
-                  {/* Fixed Pod Column */}
-                  <td className="p-2.5 text-slate-600 sticky left-[160px] bg-white z-10 border-r border-slate-200 hidden sm:table-cell whitespace-nowrap text-[11px]">
-                    {emp.pod_name?.split("(")[0] || "Alpha Pod"}
-                  </td>
-
-                  {/* Date Cells */}
+      {/* Main Roster Grid Table Container */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-card overflow-hidden flex flex-col">
+        {isLoading && !data ? (
+          <div className="p-8 space-y-4">
+            <div className="flex gap-3">
+              <Skeleton className="h-8 w-44" />
+              <Skeleton className="h-8 w-32" />
+              <Skeleton className="h-8 flex-1" />
+            </div>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        ) : filteredEmployees.length === 0 ? (
+          <EmptyState
+            icon={<User className="w-6 h-6 text-slate-400" />}
+            title="No Staff Matching Filters"
+            description="Adjust your search criteria, selected pod, or status filter to view shift assignments."
+            actionText="Clear Filters"
+            onAction={() => {
+              setSelectedPod("ALL");
+              setSearchEmployee("");
+              setStatusFilter("ALL");
+            }}
+          />
+        ) : (
+          <div className="overflow-x-auto max-h-[72vh] relative">
+            <table className="w-full text-xs text-left border-collapse table-fixed">
+              {/* Header */}
+              <thead className="bg-slate-100/95 text-slate-700 sticky top-0 z-30 backdrop-blur-md sticky-header-shadow">
+                <tr>
+                  <th className="p-3 font-bold sticky left-0 bg-slate-100/95 z-40 w-[180px] min-w-[180px] max-w-[180px] border-r border-slate-200/80 sticky-column-shadow">
+                    Employee
+                  </th>
+                  <th className="p-3 font-semibold sticky left-[180px] bg-slate-100/95 z-40 w-[140px] min-w-[140px] max-w-[140px] border-r border-slate-200/80 hidden sm:table-cell sticky-column-shadow">
+                    Pod
+                  </th>
                   {daysInMonth.map((dateStr) => {
-                    const cell = dayGridMap.get(`${emp.id}_${dateStr}`);
-                    const status = cell?.status || "unassigned";
-                    const isPinned = cell?.pinned;
-                    const label = getStatusShortLabel(cell);
+                    const dayNum = dateStr.slice(8);
+                    const dow = new Date(dateStr).getDay();
+                    const isSun = dow === 0;
+                    const isSat = dow === 6;
+                    return (
+                      <th
+                        key={dateStr}
+                        className={cn(
+                          "p-1.5 text-center font-bold w-[46px] min-w-[46px] border-r border-slate-200/80 transition-colors",
+                          isSun
+                            ? "bg-amber-100/50 text-amber-950 font-extrabold"
+                            : isSat
+                            ? "bg-slate-200/50 text-slate-800"
+                            : "text-slate-700"
+                        )}
+                      >
+                        <div className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">
+                          {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][dow]}
+                        </div>
+                        <div className="text-xs font-bold leading-tight">{dayNum}</div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
 
+              {/* Rows */}
+              <tbody className="divide-y divide-slate-100">
+                {filteredEmployees.map((emp: any) => (
+                  <tr key={emp.id} className="hover:bg-slate-50/60 transition-colors group">
+                    {/* Fixed Employee Column (180px) */}
+                    <td className="p-2.5 font-medium text-slate-900 sticky left-0 bg-white group-hover:bg-slate-50/90 z-20 w-[180px] min-w-[180px] max-w-[180px] border-r border-slate-200/80 whitespace-nowrap sticky-column-shadow transition-colors">
+                      <div className="font-bold text-xs text-slate-900 truncate">{emp.name}</div>
+                      <div className="text-[10px] text-slate-400 truncate max-w-[160px] font-mono">
+                        {emp.email}
+                      </div>
+                    </td>
+
+                    {/* Fixed Pod Column (140px at left-[180px]) */}
+                    <td className="p-2.5 text-slate-600 sticky left-[180px] bg-white group-hover:bg-slate-50/90 z-20 w-[140px] min-w-[140px] max-w-[140px] border-r border-slate-200/80 hidden sm:table-cell whitespace-nowrap text-[11px] sticky-column-shadow transition-colors">
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200/60 font-semibold text-slate-700 text-[10px] truncate block">
+                        {emp.pod_name?.split("(")[0] || "Alpha Pod"}
+                      </span>
+                    </td>
+
+                    {/* Date Cells */}
+                    {daysInMonth.map((dateStr) => {
+                      const cell = dayGridMap.get(`${emp.id}_${dateStr}`);
+                      const status = cell?.status || "unassigned";
+                      const isPinned = cell?.pinned;
+                      const label = getStatusShortLabel(cell);
+
+                      return (
+                        <td
+                          key={dateStr}
+                          onClick={() => handleCellClick(emp, dateStr)}
+                          className="p-1 text-center border-r border-slate-100/80 cursor-pointer select-none w-[46px] min-w-[46px]"
+                        >
+                          <div
+                            className={cn(
+                              "w-full h-8 rounded-lg flex items-center justify-center text-[10px] transition-all relative font-mono tracking-tight active:scale-95",
+                              getStatusCellStyles(status, isPinned)
+                            )}
+                            title={`${emp.name} • ${dateStr}\nStatus: ${status}${
+                              cell?.brand_name ? `\nBrand: ${cell.brand_name} (${cell.process_code})` : ""
+                            }${isPinned ? "\n[Pinned by Manager]" : ""}`}
+                          >
+                            <span>{label}</span>
+                            {isPinned && (
+                              <span
+                                className="absolute top-1 right-1 w-1.5 h-1.5 bg-amber-300 rounded-full shadow-xs"
+                                title="Pinned Assignment"
+                              />
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+
+              {/* Headcount Totals Footer */}
+              <tfoot className="bg-slate-100/90 text-slate-800 sticky bottom-0 z-30 backdrop-blur-md border-t-2 border-slate-300 font-semibold">
+                <tr>
+                  <td className="p-2.5 font-bold text-xs sticky left-0 bg-slate-100 z-40 w-[180px] min-w-[180px] max-w-[180px] border-r border-slate-200 sticky-column-shadow">
+                    Total Staff Working
+                  </td>
+                  <td className="p-2.5 text-xs sticky left-[180px] bg-slate-100 z-40 w-[140px] min-w-[140px] max-w-[140px] border-r border-slate-200 hidden sm:table-cell sticky-column-shadow text-slate-500 font-mono">
+                    Headcount
+                  </td>
+                  {daysInMonth.map((dateStr) => {
+                    const count = dailyHeadcounts.get(dateStr);
+                    const dow = new Date(dateStr).getDay();
+                    const isSun = dow === 0;
                     return (
                       <td
                         key={dateStr}
-                        onClick={() => handleCellClick(emp, dateStr)}
-                        className="p-1 text-center border-r border-slate-100 cursor-pointer select-none"
+                        className={cn(
+                          "p-1.5 text-center text-[11px] font-mono border-r border-slate-200 w-[46px] min-w-[46px]",
+                          isSun ? "bg-amber-100/40 text-amber-900 font-bold" : "text-slate-700"
+                        )}
+                        title={`Date ${dateStr}:\n${count?.working ?? 0} Working\n${count?.off ?? 0} Off\n${count?.leave ?? 0} On Leave`}
                       >
-                        <div
-                          className={`w-full h-8 rounded-lg flex items-center justify-center text-[11px] transition-all relative ${getStatusBadgeClass(
-                            status,
-                            isPinned
-                          )}`}
-                          title={`${emp.name} - ${dateStr}: ${status}${cell?.brand_name ? ` (${cell.brand_name} ${cell.process_code})` : ""}`}
-                        >
-                          {label}
-                          {isPinned && (
-                            <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-amber-400 rounded-full" />
-                          )}
-                        </div>
+                        {count?.working ?? 0}
                       </td>
                     );
                   })}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </tfoot>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Manual Edit Cell Modal */}
-      {editModalOpen && editingCell && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4 animate-scale-up">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">Edit Shift Assignment</h3>
-                <p className="text-xs text-slate-500">
-                  {editingCell.employeeName} • {editingCell.date}
-                </p>
+      <Modal
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        title={
+          <div>
+            <h3 className="font-bold text-slate-900 text-sm">Edit Shift Assignment</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {editingCell?.employeeName} • {editingCell?.date}
+            </p>
+          </div>
+        }
+        size="md"
+      >
+        <div className="space-y-4">
+          {editError && (
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 text-xs flex items-start gap-2.5 animate-slide-down">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-bold">Constraint Conflict Warning</div>
+                <div className="text-rose-700 leading-relaxed">{editError}</div>
               </div>
-              <button
-                onClick={() => setEditModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
+            </div>
+          )}
+
+          <div className="space-y-3.5 text-xs">
+            <div>
+              <label className="font-semibold text-slate-700 block mb-1">Shift Status</label>
+              <select
+                value={newStatus}
+                onChange={(e) => setNewStatus(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
               >
-                <X className="w-5 h-5" />
-              </button>
+                <option value="working">Working</option>
+                <option value="weekly_off">Weekly Off</option>
+                <option value="leave">Leave</option>
+                <option value="holiday">Holiday</option>
+                <option value="comp_off">Comp Off</option>
+                <option value="unassigned">Unassigned</option>
+              </select>
             </div>
 
-            {editError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 text-xs flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <div className="font-semibold">Constraint Validation Warning</div>
-                  <div>{editError}</div>
-                </div>
+            {newStatus === "working" && (
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  Brand & Process Assignment
+                </label>
+                <select
+                  value={newBpId}
+                  onChange={(e) => setNewBpId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
+                >
+                  {data?.meta?.brandProcesses?.map((bp: any) => (
+                    <option key={bp.id} value={bp.id}>
+                      {bp.brand_name} - {bp.process_code} ({bp.operating_calendar})
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
 
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="font-semibold text-slate-700 block mb-1">Status</label>
-                <select
-                  value={newStatus}
-                  onChange={(e) => setNewStatus(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="working">Working</option>
-                  <option value="weekly_off">Weekly Off</option>
-                  <option value="leave">Leave</option>
-                  <option value="holiday">Holiday</option>
-                  <option value="comp_off">Comp Off</option>
-                  <option value="unassigned">Unassigned</option>
-                </select>
+            {isOverride && (
+              <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-1.5 animate-slide-down">
+                <label className="font-bold text-amber-900 block">
+                  Manager Override Justification (Required)
+                </label>
+                <textarea
+                  rows={2}
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="Provide explicit operational justification for overriding leave or skill conflict..."
+                  className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs placeholder:text-slate-400"
+                />
               </div>
+            )}
+          </div>
 
-              {newStatus === "working" && (
-                <div>
-                  <label className="font-semibold text-slate-700 block mb-1">
-                    Brand & Process Assignment
-                  </label>
-                  <select
-                    value={newBpId}
-                    onChange={(e) => setNewBpId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  >
-                    {data?.meta?.brandProcesses?.map((bp: any) => (
-                      <option key={bp.id} value={bp.id}>
-                        {bp.brand_name} - {bp.process_code} ({bp.operating_calendar})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {isOverride && (
-                <div>
-                  <label className="font-semibold text-amber-800 block mb-1">
-                    Manager Override Justification (Required)
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={overrideReason}
-                    onChange={(e) => setOverrideReason(e.target.value)}
-                    placeholder="Provide operational reason for overriding employee unavailability..."
-                    className="w-full px-3 py-2 bg-amber-50/50 border border-amber-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setEditModalOpen(false)}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveCell}
-                disabled={savingEdit || (isOverride && !overrideReason.trim())}
-                className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl shadow-sm transition-all"
-              >
-                {savingEdit ? "Validating & Saving..." : isOverride ? "Confirm Override & Save" : "Save Changes"}
-              </button>
-            </div>
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setEditModalOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant={isOverride ? "danger" : "primary"}
+              size="sm"
+              onClick={handleSaveCell}
+              loading={savingEdit}
+              disabled={isOverride && !overrideReason.trim()}
+            >
+              {isOverride ? "Confirm Override & Save" : "Save Changes"}
+            </Button>
           </div>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }
-

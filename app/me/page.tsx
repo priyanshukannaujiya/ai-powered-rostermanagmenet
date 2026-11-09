@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import useSWR from "swr";
 import {
   Calendar as CalendarIcon,
@@ -10,23 +10,44 @@ import {
   AlertCircle,
   PlusCircle,
   Sparkles,
+  Building2,
+  FileCheck,
+  UserCheck,
+  CalendarDays,
+  ListFilter,
+  ChevronLeft,
+  ChevronRight,
+  Briefcase,
+  Coffee,
+  Info,
 } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { formatDate, parseDateString, cn } from "@/lib/utils";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function EmployeePortalPage() {
   const { showToast } = useToast();
   const currentMonth = "2026-11";
+  const [viewMode, setViewMode] = useState<"calendar" | "agenda">("calendar");
 
   // SWR for employee's leaves
-  const { data: leavesData, mutate: mutateLeaves } = useSWR("/api/leaves", fetcher, {
-    refreshInterval: 20000,
-    revalidateOnFocus: true,
-  });
+  const { data: leavesData, mutate: mutateLeaves, isLoading: leavesLoading } = useSWR(
+    "/api/leaves",
+    fetcher,
+    {
+      refreshInterval: 20000,
+      revalidateOnFocus: true,
+    }
+  );
 
   // SWR for employee's own schedule
-  const { data: scheduleData, mutate: mutateSchedule } = useSWR(
+  const { data: scheduleData, mutate: mutateSchedule, isLoading: scheduleLoading } = useSWR(
     `/api/assistant`,
     (url) =>
       fetch(url, {
@@ -40,12 +61,89 @@ export default function EmployeePortalPage() {
     }
   );
 
+  // Revalidate schedule and leaves when AI approves leaves
+  useEffect(() => {
+    const handleRefresh = () => {
+      mutateLeaves();
+      mutateSchedule();
+    };
+    window.addEventListener("roster:refresh", handleRefresh);
+    return () => window.removeEventListener("roster:refresh", handleRefresh);
+  }, [mutateLeaves, mutateSchedule]);
+
   // Leave Request Form State
   const [startDate, setStartDate] = useState("2026-11-20");
   const [endDate, setEndDate] = useState("2026-11-21");
   const [leaveType, setLeaveType] = useState<"planned" | "sick" | "other">("planned");
   const [reason, setReason] = useState("");
   const [submittingLeave, setSubmittingLeave] = useState(false);
+
+  // Canonical 30-day month generator for November 2026
+  const allNovemberDates = useMemo(() => {
+    const dates: string[] = [];
+    for (let day = 1; day <= 30; day++) {
+      dates.push(`2026-11-${String(day).padStart(2, "0")}`);
+    }
+    return dates;
+  }, []);
+
+  // Map API schedule records by clean YYYY-MM-DD
+  const rawScheduleList = scheduleData?.data?.schedule || [];
+  const scheduleByDate = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const item of rawScheduleList) {
+      const parsed = parseDateString(item.date);
+      if (parsed) {
+        // Only keep November 2026 dates
+        if (parsed.dateStr.startsWith("2026-11")) {
+          // Keep first occurrence to avoid duplicates
+          if (!map.has(parsed.dateStr)) {
+            map.set(parsed.dateStr, {
+              ...item,
+              cleanDate: parsed.dateStr,
+              dayNum: parsed.day,
+            });
+          }
+        }
+      }
+    }
+    return map;
+  }, [rawScheduleList]);
+
+  // Unified canonical list of shifts for all 30 days
+  const canonicalMonthShifts = useMemo(() => {
+    return allNovemberDates.map((dateStr) => {
+      const dayNum = parseInt(dateStr.slice(8), 10);
+      const existing = scheduleByDate.get(dateStr);
+      if (existing) {
+        return existing;
+      }
+      // If no explicit row exists yet, check day of week: Sundays (day 1, 8, 15, 22, 29)
+      const d = new Date(2026, 10, dayNum);
+      const dow = d.getDay();
+      const isWeekend = dow === 0;
+      return {
+        cleanDate: dateStr,
+        dayNum,
+        status: isWeekend ? "weekly_off" : "unassigned",
+        brand_name: null,
+        process_code: null,
+      };
+    });
+  }, [allNovemberDates, scheduleByDate]);
+
+  // Accurate Summary Metrics (strictly within November 2026)
+  const workingShifts = canonicalMonthShifts.filter((s) => s.status === "working");
+  const weeklyOffs = canonicalMonthShifts.filter((s) => s.status === "weekly_off");
+  const approvedLeaves = canonicalMonthShifts.filter((s) => s.status === "leave");
+
+  // Employee Name
+  const employeeName =
+    rawScheduleList[0]?.employee_name ||
+    leavesData?.leaves?.[0]?.employee_name ||
+    "Team Member";
+  const primaryBrand =
+    workingShifts[0]?.brand_name || "Operations Team";
 
   const handleLeaveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,14 +166,14 @@ export default function EmployeePortalPage() {
         showToast({
           type: "success",
           title: "Leave Request Submitted",
-          message: "Your leave request is now pending review by your manager / pod lead.",
+          message: "Your leave request has been submitted to your pod lead for review.",
         });
         setReason("");
         mutateLeaves();
       } else {
         showToast({
           type: "error",
-          title: "Submission Failed",
+          title: "Submission Blocked",
           message: json.error || "Failed to submit request",
         });
       }
@@ -86,221 +184,465 @@ export default function EmployeePortalPage() {
     }
   };
 
-  const scheduleList = scheduleData?.data?.schedule || [];
   const leavesList = leavesData?.leaves || [];
 
-  const workingShifts = scheduleList.filter((s: any) => s.status === "working");
-  const weeklyOffs = scheduleList.filter((s: any) => s.status === "weekly_off");
-  const approvedLeaves = scheduleList.filter((s: any) => s.status === "leave");
+  // Calendar matrix calculation for November 2026:
+  // Nov 1, 2026 is Sunday (day index 0)
+  // Total 30 days
+  const calendarDays = useMemo(() => {
+    // 0 = Sunday, 1 = Monday ... 6 = Saturday
+    const firstDayDow = new Date(2026, 10, 1).getDay(); // 0 (Sunday)
+    // Create padding slots before day 1
+    const padSlots = Array.from({ length: firstDayDow }).map((_, i) => null);
+    return [...padSlots, ...canonicalMonthShifts];
+  }, [canonicalMonthShifts]);
 
   return (
-    <div className="space-y-6">
-      {/* Welcome Card */}
-      <div className="bg-gradient-to-r from-slate-900 to-indigo-950 p-6 rounded-2xl text-white shadow-md">
-        <h1 className="text-xl font-bold tracking-tight">Your November 2026 Roster</h1>
-        <p className="text-xs text-slate-300 mt-1">
-          Review your assigned brand shifts, weekly offs, and request planned leaves.
-        </p>
-
-        <div className="grid grid-cols-3 gap-3 mt-5">
-          <div className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/10">
-            <span className="text-[11px] text-slate-300 block font-medium">Working Shifts</span>
-            <span className="text-xl font-bold text-cyan-300 mt-0.5 block">{workingShifts.length} days</span>
+    <div className="space-y-6 animate-fade-in font-sans">
+      {/* Top Welcome & KPI Hero Card */}
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-card p-6 sm:p-7 relative overflow-hidden">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-cyan-600 flex items-center justify-center text-white shadow-md shadow-cyan-600/30">
+                <Briefcase className="w-5 h-5" />
+              </div>
+              <div>
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+                  Welcome, {employeeName}
+                </h1>
+                <p className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                  <span className="font-semibold text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-md border border-cyan-200/60">
+                    {primaryBrand}
+                  </span>
+                  <span>•</span>
+                  <span>November 2026 Roster</span>
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/10">
-            <span className="text-[11px] text-slate-300 block font-medium">Weekly Offs</span>
-            <span className="text-xl font-bold text-slate-200 mt-0.5 block">{weeklyOffs.length} days</span>
+          {/* Quick Date Badge */}
+          <div className="flex items-center gap-2 self-start md:self-auto">
+            <div className="px-3 py-1.5 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-1.5 shadow-xs">
+              <CalendarIcon className="w-3.5 h-3.5 text-cyan-600" />
+              <span>30 Days in November</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Month Stats Grid (Accurate for 30 days) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mt-6">
+          <div className="p-4 rounded-2xl bg-cyan-50/60 border border-cyan-100/90">
+            <span className="text-[11px] text-cyan-700 block font-semibold uppercase tracking-wider">
+              Working Days
+            </span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl font-bold text-slate-900">{workingShifts.length}</span>
+              <span className="text-xs text-slate-500">days</span>
+            </div>
+            <span className="text-[10px] text-cyan-600 mt-1 block font-medium">
+              ~{workingShifts.length * 8} operating hours
+            </span>
           </div>
 
-          <div className="bg-white/10 backdrop-blur-md p-3 rounded-xl border border-white/10">
-            <span className="text-[11px] text-slate-300 block font-medium">Approved Leave</span>
-            <span className="text-xl font-bold text-amber-300 mt-0.5 block">{approvedLeaves.length} days</span>
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+            <span className="text-[11px] text-slate-600 block font-semibold uppercase tracking-wider">
+              Weekly Offs
+            </span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl font-bold text-slate-900">{weeklyOffs.length}</span>
+              <span className="text-xs text-slate-500">days</span>
+            </div>
+            <span className="text-[10px] text-slate-400 mt-1 block font-medium">
+              Mandatory rest periods
+            </span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-100/90">
+            <span className="text-[11px] text-amber-800 block font-semibold uppercase tracking-wider">
+              Approved Leave
+            </span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-2xl font-bold text-amber-950">{approvedLeaves.length}</span>
+              <span className="text-xs text-amber-800">days</span>
+            </div>
+            <span className="text-[10px] text-amber-700 mt-1 block font-medium">
+              Confirmed unavailabilities
+            </span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-100/90">
+            <span className="text-[11px] text-emerald-800 block font-semibold uppercase tracking-wider">
+              Roster Status
+            </span>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-xl font-bold text-emerald-950">Active</span>
+            </div>
+            <span className="text-[10px] text-emerald-700 mt-1 block font-medium">
+              Published & Verified
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Main Grid: Calendar on Left, Request Form on Right */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Calendar / Shift Schedule (2 cols) */}
-        <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h2 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-              <CalendarIcon className="w-4 h-4 text-indigo-600" /> Daily Shift Calendar
-            </h2>
-            <div className="flex items-center gap-2 text-[10px]">
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded bg-indigo-600 inline-block" /> Working
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded bg-slate-300 inline-block" /> Off
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded bg-amber-400 inline-block" /> Leave
-              </span>
-            </div>
-          </div>
+      {/* Main Grid: Left Calendar / Agenda (2 cols), Right Leave Request (1 col) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column: Interactive Schedule */}
+        <div className="lg:col-span-2 space-y-4">
+          <Card>
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle>My November 2026 Schedule</CardTitle>
+                <CardDescription>
+                  Your assigned shifts, operating brand tasks, and weekly rest days
+                </CardDescription>
+              </div>
 
-          {scheduleList.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-xs">
-              <Clock className="w-6 h-6 mx-auto mb-2 opacity-50" />
-              Roster for November 2026 is being finalized by operations management.
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 text-xs">
-              {scheduleList.map((item: any) => {
-                const isWorking = item.status === "working";
-                const isOff = item.status === "weekly_off";
-                const isLeave = item.status === "leave";
-                const isHol = item.status === "holiday";
-
-                return (
-                  <div
-                    key={item.date}
-                    className={`p-3 rounded-xl border flex flex-col justify-between min-h-[72px] transition-all ${
-                      isWorking
-                        ? "bg-indigo-50/80 border-indigo-200 text-indigo-950"
-                        : isOff
-                        ? "bg-slate-50 border-slate-200 text-slate-700"
-                        : isLeave
-                        ? "bg-amber-50 border-amber-300 text-amber-950"
-                        : isHol
-                        ? "bg-rose-50 border-rose-200 text-rose-950"
-                        : "bg-slate-50/50 border-slate-100 text-slate-400"
-                    }`}
+              {/* View Switcher & Legend */}
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <div className="flex items-center bg-slate-100 p-0.5 rounded-xl text-xs font-semibold">
+                  <button
+                    onClick={() => setViewMode("calendar")}
+                    className={cn(
+                      "px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5",
+                      viewMode === "calendar"
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
                   >
-                    <div className="flex items-center justify-between text-[11px] font-semibold">
-                      <span>{item.date.slice(5)}</span>
-                      <span
-                        className={`text-[9px] uppercase px-1.5 py-0.2 rounded font-bold ${
-                          isWorking
-                            ? "bg-indigo-600 text-white"
-                            : isOff
-                            ? "bg-slate-200 text-slate-700"
-                            : isLeave
-                            ? "bg-amber-400 text-amber-950"
-                            : "bg-slate-200 text-slate-600"
-                        }`}
-                      >
-                        {item.status === "weekly_off" ? "Off" : item.status}
-                      </span>
-                    </div>
+                    <CalendarDays className="w-3.5 h-3.5" /> Month
+                  </button>
+                  <button
+                    onClick={() => setViewMode("agenda")}
+                    className={cn(
+                      "px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5",
+                      viewMode === "agenda"
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
+                  >
+                    <ListFilter className="w-3.5 h-3.5" /> Agenda
+                  </button>
+                </div>
+              </div>
+            </CardHeader>
 
-                    <div className="mt-1">
-                      {isWorking && item.brand_name && (
-                        <div className="text-[10px] text-indigo-700 truncate font-semibold">
-                          {item.brand_name} ({item.process_code})
-                        </div>
-                      )}
-                      {item.notes && <div className="text-[10px] text-slate-500 truncate">{item.notes}</div>}
-                    </div>
+            <CardContent>
+              {scheduleLoading && !scheduleData ? (
+                <div className="p-4 space-y-3">
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-64 w-full" />
+                </div>
+              ) : viewMode === "calendar" ? (
+                /* True 7-Column Calendar View */
+                <div className="space-y-2">
+                  {/* Day of Week Headers */}
+                  <div className="grid grid-cols-7 gap-1.5 text-center text-[11px] font-bold text-slate-500 pb-1 border-b border-slate-100">
+                    <span className="text-amber-800">Sun</span>
+                    <span>Mon</span>
+                    <span>Tue</span>
+                    <span>Wed</span>
+                    <span>Thu</span>
+                    <span>Fri</span>
+                    <span>Sat</span>
                   </div>
-                );
-              })}
-            </div>
-          )}
+
+                  {/* Calendar Grid */}
+                  <div className="grid grid-cols-7 gap-1.5">
+                    {calendarDays.map((item, idx) => {
+                      if (!item) {
+                        return (
+                          <div
+                            key={`empty-${idx}`}
+                            className="min-h-[82px] rounded-xl bg-slate-50/30 border border-transparent"
+                          />
+                        );
+                      }
+
+                      const isWorking = item.status === "working";
+                      const isOff = item.status === "weekly_off";
+                      const isLeave = item.status === "leave";
+                      const isHoliday = item.status === "holiday";
+
+                      return (
+                        <div
+                          key={item.cleanDate}
+                          className={cn(
+                            "min-h-[88px] rounded-xl border p-2 flex flex-col justify-between transition-all group",
+                            isWorking
+                              ? "bg-indigo-50/60 border-indigo-200/80 hover:border-indigo-300"
+                              : isOff
+                              ? "bg-slate-50/80 border-slate-200/70 hover:border-slate-300"
+                              : isLeave
+                              ? "bg-amber-50/80 border-amber-200 hover:border-amber-300"
+                              : isHoliday
+                              ? "bg-rose-50/70 border-rose-200"
+                              : "bg-white border-slate-200/60"
+                          )}
+                        >
+                          {/* Day Number Header */}
+                          <div className="flex items-center justify-between">
+                            <span
+                              className={cn(
+                                "text-xs font-bold font-mono",
+                                isWorking ? "text-indigo-950" : isOff ? "text-slate-500" : isLeave ? "text-amber-950" : "text-slate-700"
+                              )}
+                            >
+                              {item.dayNum}
+                            </span>
+                            <span
+                              className={cn(
+                                "text-[9px] px-1 py-0.2 rounded font-bold uppercase",
+                                isWorking
+                                  ? "bg-indigo-600 text-white"
+                                  : isOff
+                                  ? "bg-slate-200 text-slate-600"
+                                  : isLeave
+                                  ? "bg-amber-400 text-amber-950"
+                                  : "bg-slate-100 text-slate-400"
+                              )}
+                            >
+                              {isWorking ? "Shift" : isOff ? "Off" : isLeave ? "Leave" : "-"}
+                            </span>
+                          </div>
+
+                          {/* Shift Details Content */}
+                          <div className="mt-1 space-y-0.5">
+                            {isWorking && (
+                              <div>
+                                <div className="text-[10px] font-bold text-indigo-900 truncate" title={item.brand_name}>
+                                  {item.brand_name || "Assigned"}
+                                </div>
+                                {item.process_code && (
+                                  <span className="text-[9px] font-mono font-bold text-indigo-600 bg-indigo-100/80 px-1 py-0.2 rounded inline-block">
+                                    {item.process_code}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {isOff && (
+                              <span className="text-[10px] text-slate-400 font-medium block">
+                                Rest Day
+                              </span>
+                            )}
+
+                            {isLeave && (
+                              <span className="text-[10px] text-amber-800 font-semibold block">
+                                Approved
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* Agenda List View */
+                <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
+                  {canonicalMonthShifts.map((shift) => {
+                    const isWorking = shift.status === "working";
+                    const isOff = shift.status === "weekly_off";
+                    const isLeave = shift.status === "leave";
+
+                    return (
+                      <div
+                        key={shift.cleanDate}
+                        className="py-3 px-2 flex items-center justify-between hover:bg-slate-50/80 transition-colors text-xs"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 text-center">
+                            <span className="text-[10px] text-slate-400 uppercase font-semibold block">
+                              Nov
+                            </span>
+                            <span className="text-base font-bold text-slate-900 font-mono">
+                              {shift.dayNum}
+                            </span>
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                              <span>
+                                {isWorking
+                                  ? shift.brand_name || "General Shift"
+                                  : isOff
+                                  ? "Weekly Off (Rest Day)"
+                                  : isLeave
+                                  ? "Approved Leave"
+                                  : "Unassigned"}
+                              </span>
+                              {shift.process_code && (
+                                <span className="font-mono text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-200/80 px-1.5 py-0.2 rounded font-bold">
+                                  {shift.process_code}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {isWorking ? "Full Day Operational Shift" : "No active shifts scheduled"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <Badge
+                          variant={isWorking ? "working" : isOff ? "weekly_off" : isLeave ? "leave" : "neutral"}
+                          size="sm"
+                          dot
+                        >
+                          {isWorking ? "Working" : isOff ? "Weekly Off" : isLeave ? "Leave" : "Off"}
+                        </Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Leave Request Form (1 col) */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
-          <div className="border-b border-slate-100 pb-3">
-            <h2 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-              <PlusCircle className="w-4 h-4 text-cyan-600" /> Request Leave
-            </h2>
-            <p className="text-[11px] text-slate-500 mt-0.5">Creates a pending request for your pod lead</p>
-          </div>
-
-          <form onSubmit={handleLeaveSubmit} className="space-y-3 text-xs">
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">Start Date</label>
-              <input
-                type="date"
-                required
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-500"
-              />
-            </div>
-
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">End Date</label>
-              <input
-                type="date"
-                required
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-500"
-              />
-            </div>
-
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">Leave Type</label>
-              <select
-                value={leaveType}
-                onChange={(e: any) => setLeaveType(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-500"
-              >
-                <option value="planned">Planned Leave</option>
-                <option value="sick">Sick Leave</option>
-                <option value="other">Other / Personal</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">Reason (Optional)</label>
-              <textarea
-                rows={2}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Family event, medical appointment, etc."
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-500"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={submittingLeave}
-              className="w-full py-2.5 px-4 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              <Send className="w-3.5 h-3.5" />
-              {submittingLeave ? "Submitting..." : "Submit Leave Request"}
-            </button>
-          </form>
-
-          {/* Past Leaves Status */}
-          <div className="pt-4 border-t border-slate-100 space-y-2">
-            <h3 className="font-bold text-[11px] text-slate-500 uppercase tracking-wider">
-              Your Recent Requests
-            </h3>
-            {leavesList.length === 0 ? (
-              <p className="text-[11px] text-slate-400">No requests submitted yet.</p>
-            ) : (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {leavesList.map((l: any) => (
-                  <div key={l.id} className="p-2 rounded-lg bg-slate-50 border border-slate-100 text-[11px]">
-                    <div className="flex items-center justify-between font-semibold">
-                      <span>{l.start_date} to {l.end_date}</span>
-                      <span
-                        className={`px-1.5 py-0.2 rounded text-[10px] uppercase ${
-                          l.status === "approved"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : l.status === "rejected"
-                            ? "bg-rose-100 text-rose-800"
-                            : "bg-amber-100 text-amber-800"
-                        }`}
-                      >
-                        {l.status}
-                      </span>
-                    </div>
-                    {l.reason && <p className="text-[10px] text-slate-400 mt-0.5 truncate">{l.reason}</p>}
-                  </div>
-                ))}
+        {/* Right Column: Leave Request Form & Recent Requests */}
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>Request Leave</CardTitle>
+                <CardDescription>
+                  Submits an unavailability request to your pod lead
+                </CardDescription>
               </div>
-            )}
-          </div>
+            </CardHeader>
+
+            <CardContent className="space-y-4">
+              <form onSubmit={handleLeaveSubmit} className="space-y-3.5 text-xs">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min="2026-11-01"
+                    max="2026-11-30"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 font-medium text-slate-800 shadow-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min={startDate}
+                    max="2026-11-30"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 font-medium text-slate-800 shadow-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    Leave Category
+                  </label>
+                  <select
+                    value={leaveType}
+                    onChange={(e: any) => setLeaveType(e.target.value)}
+                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 font-medium text-slate-800 cursor-pointer shadow-xs"
+                  >
+                    <option value="planned">Planned Annual / Casual Leave</option>
+                    <option value="sick">Medical / Sick Leave</option>
+                    <option value="other">Personal / Urgent Leave</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    Reason (Optional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="Brief note for your pod lead..."
+                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 placeholder:text-slate-400 text-xs shadow-xs"
+                  />
+                </div>
+
+                <Button
+                  type="submit"
+                  disabled={submittingLeave}
+                  loading={submittingLeave}
+                  variant="primary"
+                  size="md"
+                  className="w-full bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 shadow-cyan-600/20"
+                  icon={<Send className="w-3.5 h-3.5" />}
+                >
+                  Submit Leave Request
+                </Button>
+              </form>
+
+              {/* Past Leaves Status List */}
+              <div className="pt-4 border-t border-slate-100 space-y-2.5">
+                <h4 className="font-bold text-[11px] text-slate-500 uppercase tracking-wider">
+                  Your Recent Requests
+                </h4>
+                {leavesList.length === 0 ? (
+                  <p className="text-[11px] text-slate-400">No requests submitted yet.</p>
+                ) : (
+                  <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                    {leavesList.map((l: any) => {
+                      const formattedStart = formatDate(l.start_date);
+                      const formattedEnd = formatDate(l.end_date);
+                      const dateRangeDisplay =
+                        formattedStart === formattedEnd
+                          ? formattedStart
+                          : `${formattedStart} - ${formattedEnd}`;
+
+                      return (
+                        <div
+                          key={l.id}
+                          className="p-3 rounded-2xl bg-slate-50/80 border border-slate-200/80 text-[11px] space-y-1.5 shadow-xs"
+                        >
+                          <div className="flex items-center justify-between font-semibold">
+                            <span className="font-mono text-slate-900 font-bold">
+                              {dateRangeDisplay}
+                            </span>
+                            <Badge
+                              variant={
+                                l.status === "approved"
+                                  ? "success"
+                                  : l.status === "rejected"
+                                  ? "rejected"
+                                  : "pending"
+                              }
+                              size="sm"
+                              dot
+                            >
+                              {l.status}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-500">
+                            <span className="capitalize">{l.type} leave</span>
+                            {l.reason && (
+                              <span className="text-slate-400 italic truncate max-w-[120px]">
+                                "{l.reason}"
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>
   );
 }
-
