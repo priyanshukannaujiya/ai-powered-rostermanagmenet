@@ -8,7 +8,6 @@ import {
   ShieldCheck,
   Users,
   LogIn,
-  Sparkles,
   AlertCircle,
   Eye,
   EyeOff,
@@ -18,10 +17,9 @@ import {
   Mail,
   CheckCircle2,
   ArrowRight,
-  Activity,
-  Layers,
-  Cpu,
+  Clock,
   Shield,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -49,7 +47,7 @@ function LoginForm() {
       });
 
       if (result?.error) {
-        setError("Invalid credentials. Please verify email and password.");
+        setError("Invalid email or password. Please verify your credentials.");
         setLoading(false);
       } else {
         router.push(callbackUrl);
@@ -64,39 +62,43 @@ function LoginForm() {
   const demoProfiles = [
     {
       role: "Operations Manager",
+      name: "Suresh Rao",
       email: "manager@opscompany.com",
       pass: "Manager@123",
-      tag: "Full Admin",
-      badgeColor: "bg-indigo-500/20 text-indigo-300 border-indigo-400/30",
+      tag: "Manager",
+      badgeClass: "bg-indigo-50 text-indigo-700 border-indigo-200",
       icon: ShieldCheck,
-      desc: "System oversight, master data & conflict resolution",
+      desc: "Full management access across all pods and master data",
     },
     {
       role: "Pod Lead",
+      name: "Aarav Sharma",
       email: "lead.pod1@opscompany.com",
       pass: "Lead@123",
-      tag: "Alpha Pod",
-      badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-400/30",
+      tag: "Pod Lead",
+      badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200",
       icon: Users,
-      desc: "Pod team capacity, approvals & shift replanning",
+      desc: "Team schedule management and leave request approvals",
     },
     {
-      role: "Priya Patel",
+      role: "Team Lead",
+      name: "Priya Patel",
       email: "employee.priya@opscompany.com",
       pass: "Employee@123",
-      tag: "Staff Lead",
-      badgeColor: "bg-cyan-500/20 text-cyan-300 border-cyan-400/30",
+      tag: "Beta Pod",
+      badgeClass: "bg-blue-50 text-blue-700 border-blue-200",
       icon: UserCheck,
-      desc: "Beta Pod Lead & Brewhaus Coffee Specialist",
+      desc: "Brewhaus Coffee lead specialist and schedule view",
     },
     {
-      role: "Aarav Sharma",
+      role: "Team Member",
+      name: "Neha Joshi",
       email: "employee.aarav@opscompany.com",
       pass: "Employee@123",
-      tag: "Staff Member",
-      badgeColor: "bg-amber-500/20 text-amber-300 border-amber-400/30",
+      tag: "Alpha Pod",
+      badgeClass: "bg-slate-100 text-slate-700 border-slate-200",
       icon: Building2,
-      desc: "Alpha Pod Specialist on Lumora Skincare",
+      desc: "Lumora Skincare specialist and personal calendar view",
     },
   ];
 
@@ -107,116 +109,119 @@ function LoginForm() {
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
-      {/* Left Column: SaaS Value Proposition & Architecture */}
-      <div className="lg:col-span-6 xl:col-span-7 space-y-6 text-left">
-        {/* Logo & Category */}
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-500 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-xl shadow-indigo-500/25 border border-indigo-400/30">
-            <Calendar className="w-6 h-6" />
+    <div className="w-full max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-14 items-center">
+      {/* Left Column: Professional Platform Overview */}
+      <div className="lg:col-span-6 xl:col-span-7 space-y-7 text-left">
+        {/* Brand Header */}
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-600/20">
+            <Calendar className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xl font-extrabold tracking-tight text-white">Smart Roster</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 uppercase tracking-widest">
-                Enterprise
+              <span className="text-xl font-bold tracking-tight text-slate-900">
+                Smart Roster
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
+                Operations
               </span>
             </div>
-            <p className="text-xs text-slate-400 font-medium">Workforce Operations & Scheduling Engine</p>
+            <p className="text-xs text-slate-500 font-normal">
+              Workforce Operations & Shift Management System
+            </p>
           </div>
         </div>
 
-        {/* Main Pitch */}
+        {/* Headline */}
         <div className="space-y-3">
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
-            Algorithmic Workforce Operations for Multi-Brand D2C Teams.
+          <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 tracking-tight leading-snug">
+            Automated workforce scheduling and shift management.
           </h1>
-          <p className="text-sm text-slate-400 leading-relaxed max-w-xl">
-            Deterministic constraint scheduling, automated leave replanning, and pod workload balancing. Built on Neon Serverless PostgreSQL.
+          <p className="text-sm text-slate-600 leading-relaxed max-w-xl">
+            Coordinate team capacity, enforce minimum staffing requirements, and manage shift schedules across multi-brand operations with real-time leave replanning.
           </p>
         </div>
 
-        {/* Live Operational Metrics Card */}
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 backdrop-blur-xl shadow-xl space-y-3.5">
-          <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-800">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-semibold text-slate-300">Live Operations Graph</span>
+        {/* System Capabilities Overview */}
+        <div className="space-y-3 pt-1">
+          <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5 border border-indigo-100">
+              <ShieldCheck className="w-4 h-4" />
             </div>
-            <span className="font-mono text-[11px] text-slate-400">November 2026 Cycle</span>
+            <div>
+              <h2 className="text-xs font-semibold text-slate-900">Constraint-Based Scheduling</h2>
+              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                Automatically verifies working limits, mandatory weekly rest periods, and brand coverage requirements.
+              </p>
+            </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
-              <div className="text-lg font-bold text-white tracking-tight">98.4%</div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mt-0.5">Coverage</div>
+          <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-100">
+              <Clock className="w-4 h-4" />
             </div>
-            <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
-              <div className="text-lg font-bold text-indigo-400 tracking-tight">32 Staff</div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mt-0.5">6 Pods</div>
+            <div>
+              <h2 className="text-xs font-semibold text-slate-900">Real-Time Schedule Replanning</h2>
+              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                Approved leaves instantly recalculate future assignments while preserving pinned shifts and historical records.
+              </p>
             </div>
-            <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/50">
-              <div className="text-lg font-bold text-cyan-400 tracking-tight">&lt; 50ms</div>
-              <div className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mt-0.5">Replan Speed</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5 border border-blue-100">
+              <Layers className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-xs font-semibold text-slate-900">Pod & Capacity Balancing</h2>
+              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                Distributes shifts evenly across operational pods to prevent employee fatigue and ensure balanced coverage.
+              </p>
             </div>
           </div>
         </div>
 
-        {/* Enterprise Pillar List */}
-        <div className="space-y-2.5 pt-1 text-xs">
-          <div className="flex items-center gap-2.5 text-slate-300">
-            <div className="w-5 h-5 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-            </div>
-            <span><strong>Deterministic Constraints</strong>: Single status per day, 365-day min headcount & certified skills</span>
-          </div>
-          <div className="flex items-center gap-2.5 text-slate-300">
-            <div className="w-5 h-5 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-500/30">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-            </div>
-            <span><strong>Automated Replan Engine</strong>: Leave approvals dynamically re-solve unpinned future days</span>
-          </div>
-          <div className="flex items-center gap-2.5 text-slate-300">
-            <div className="w-5 h-5 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0 border border-cyan-500/30">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-            </div>
-            <span><strong>Single Point of Failure (SPOF) Guard</strong>: Dynamic cross-trained backup allocation</span>
-          </div>
+        {/* Operational Scope Strip */}
+        <div className="flex items-center gap-6 text-xs text-slate-500 pt-2 border-t border-slate-200">
+          <span className="flex items-center gap-1.5 font-medium text-slate-700">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            32 Active Staff
+          </span>
+          <span>•</span>
+          <span className="font-medium text-slate-700">6 Operational Pods</span>
+          <span>•</span>
+          <span className="font-medium text-slate-700">12 Operating Brands</span>
         </div>
       </div>
 
-      {/* Right Column: Authentication Console Card */}
+      {/* Right Column: Clean White Authentication Card */}
       <div className="lg:col-span-6 xl:col-span-5 w-full">
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-3xl p-7 sm:p-8 shadow-2xl backdrop-blur-2xl text-slate-100 relative">
-          {/* Card Ambient Glow */}
-          <div className="absolute -top-10 -right-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-
-          {/* Card Title */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-7 sm:p-8 shadow-xl shadow-slate-200/50 text-slate-900">
+          {/* Form Header */}
           <div className="mb-6">
-            <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              <span>Sign In to Console</span>
-              <Shield className="w-4 h-4 text-indigo-400" />
+            <h2 className="text-xl font-bold tracking-tight text-slate-900">
+              Sign In
             </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Select a test profile or enter enterprise credentials.
+            <p className="text-xs text-slate-500 mt-1">
+              Enter your work email and password to access the portal.
             </p>
           </div>
 
           {error && (
-            <div className="mb-5 p-3.5 bg-rose-950/80 border border-rose-700/80 rounded-2xl text-rose-200 text-xs flex items-center gap-2.5 animate-slide-down">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-              <span>{error}</span>
+            <div className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2.5 animate-slide-down">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+              <span className="font-medium">{error}</span>
             </div>
           )}
 
           {/* Form */}
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                 Work Email
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <Mail className="w-4 h-4" />
                 </div>
                 <input
@@ -224,7 +229,7 @@ function LoginForm() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-3.5 py-2.5 bg-slate-800/80 border border-slate-700/90 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-medium"
+                  className="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 transition-colors shadow-xs"
                   placeholder="name@opscompany.com"
                 />
               </div>
@@ -232,13 +237,15 @@ function LoginForm() {
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label className="block text-xs font-semibold text-slate-700">
                   Password
                 </label>
-                <span className="text-[11px] text-slate-500 font-mono">Demo: Manager@123</span>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  Demo: Manager@123
+                </span>
               </div>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
@@ -246,12 +253,12 @@ function LoginForm() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-10 py-2.5 bg-slate-800/80 border border-slate-700/90 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-medium"
+                  className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 transition-colors shadow-xs"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-200 transition-colors"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                   tabIndex={-1}
                   aria-label="Toggle password visibility"
                 >
@@ -263,33 +270,33 @@ function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-4 bg-gradient-to-r from-indigo-600 via-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 active:from-indigo-700 active:to-indigo-800 text-white rounded-xl text-sm font-semibold transition-all duration-150 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 disabled:opacity-50 mt-2 cursor-pointer"
+              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-xl text-sm font-semibold transition-colors duration-150 flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 mt-2 cursor-pointer"
             >
               {loading ? (
                 <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
               ) : (
                 <>
                   <LogIn className="w-4 h-4" />
-                  <span>Authenticate & Launch Console</span>
-                  <ArrowRight className="w-4 h-4 ml-1 opacity-70" />
+                  <span>Sign In to Dashboard</span>
+                  <ArrowRight className="w-4 h-4 ml-0.5 opacity-80" />
                 </>
               )}
             </button>
           </form>
 
-          {/* 1-Click Fast Switch Enterprise Profiles */}
-          <div className="mt-6 pt-5 border-t border-slate-800">
+          {/* Quick Sign-In Profiles */}
+          <div className="mt-6 pt-5 border-t border-slate-200">
             <div className="flex items-center justify-between mb-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                <span>1-Click Test Profiles</span>
-              </div>
-              <span className="text-[10px] text-slate-500 font-mono">Instant Autofill</span>
+              <span className="text-xs font-semibold text-slate-700">
+                Demo Accounts
+              </span>
+              <span className="text-[11px] text-slate-400">
+                Click to autofill
+              </span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
               {demoProfiles.map((p) => {
-                const Icon = p.icon;
                 const isSelected = email === p.email;
                 return (
                   <button
@@ -297,35 +304,41 @@ function LoginForm() {
                     type="button"
                     onClick={() => selectProfile(p.email, p.pass)}
                     className={cn(
-                      "p-2.5 text-left rounded-xl border transition-all duration-150 flex flex-col justify-between cursor-pointer",
+                      "p-2.5 text-left rounded-xl border transition-all duration-150 cursor-pointer flex flex-col justify-between",
                       isSelected
-                        ? "bg-indigo-950/40 border-indigo-500 ring-1 ring-indigo-500/50"
-                        : "bg-slate-800/40 hover:bg-slate-800 border-slate-800 hover:border-slate-700"
+                        ? "bg-indigo-50/80 border-indigo-400 ring-1 ring-indigo-400/40"
+                        : "bg-slate-50/80 hover:bg-slate-100/80 border-slate-200"
                     )}
                   >
                     <div className="flex items-center justify-between gap-1 mb-1">
-                      <div className="font-semibold text-slate-200 flex items-center gap-1.5 truncate text-[11px]">
-                        <Icon className="w-3 h-3 shrink-0 text-slate-400" />
-                        <span className="truncate">{p.role}</span>
-                      </div>
-                      <span className={cn("text-[8px] px-1 py-0.2 rounded font-bold border shrink-0", p.badgeColor)}>
+                      <span className="font-semibold text-slate-800 truncate text-[11px]">
+                        {p.role}
+                      </span>
+                      <span
+                        className={cn(
+                          "text-[9px] px-1.5 py-0.2 rounded font-medium border shrink-0",
+                          p.badgeClass
+                        )}
+                      >
                         {p.tag}
                       </span>
                     </div>
-                    <div className="text-[10px] text-slate-400 truncate font-mono">{p.email}</div>
+                    <div className="text-[10px] text-slate-500 truncate font-mono">
+                      {p.email}
+                    </div>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* Security Footnote */}
-          <div className="mt-5 pt-4 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-500">
-            <span className="flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          {/* Security & Access Info */}
+          <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-slate-400" />
               Role-Based Access Control
             </span>
-            <span className="font-mono">Neon Serverless TLS</span>
+            <span>PostgreSQL Protected</span>
           </div>
         </div>
       </div>
@@ -335,16 +348,14 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-12 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 text-slate-100 relative overflow-hidden">
-      {/* Background Architectural Mesh & Glow */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#3341550f_1px,transparent_1px),linear-gradient(to_bottom,#3341550f_1px,transparent_1px)] bg-[size:3.5rem_3.5rem] [mask-image:radial-gradient(ellipse_70%_60%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none" />
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-600/10 rounded-full blur-[120px] pointer-events-none" />
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-12 bg-slate-50 text-slate-900 relative">
+      {/* Subtle Clean Grid Pattern */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#e2e8f00a_1px,transparent_1px),linear-gradient(to_bottom,#e2e8f00a_1px,transparent_1px)] bg-[size:3rem_3rem] pointer-events-none" />
 
       <Suspense
         fallback={
-          <div className="text-white text-xs flex items-center gap-2">
-            <span className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-500 border-t-transparent" />
+          <div className="text-slate-600 text-xs flex items-center gap-2">
+            <span className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent" />
             Loading authentication portal...
           </div>
         }
