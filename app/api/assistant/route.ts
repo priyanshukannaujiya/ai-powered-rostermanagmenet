@@ -46,7 +46,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
         },
       },
     },
@@ -59,7 +59,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
         },
       },
     },
@@ -72,7 +72,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
         },
       },
     },
@@ -85,7 +85,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
         },
       },
     },
@@ -98,9 +98,9 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          employee_name: { type: "string", description: "Name of the staff member whose leave to approve, e.g. 'Priya' or 'Rahul'" },
-          leave_id: { type: "string", description: "Optional specific leave ID, e.g. 'leave-pending-1'" },
-          month: { type: "string", description: "Target month, e.g. '2026-11'" },
+          employee_name: { type: ["string", "null"], description: "Name of the staff member whose leave to approve, e.g. 'Priya' or 'Rahul'" },
+          leave_id: { type: ["string", "null"], description: "Optional specific leave ID, e.g. 'leave-pending-1'" },
+          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
         },
       },
     },
@@ -113,10 +113,9 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          brand_or_process: { type: "string", description: "Name of the brand or process code (e.g. 'Brewhaus', 'CS', 'NDR')" },
-          date: { type: "string", description: "Target date in YYYY-MM-DD format, e.g. '2026-11-15'" },
+          brand_or_process: { type: ["string", "null"], description: "Name of the brand or process code (e.g. 'Brewhaus', 'CS', 'NDR')" },
+          date: { type: ["string", "null"], description: "Target date in YYYY-MM-DD format, e.g. '2026-11-15'" },
         },
-        required: ["brand_or_process", "date"],
       },
     },
   },
@@ -128,9 +127,9 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          employee_name: { type: "string", description: "Name of the employee to inspect (e.g. 'Priya Patel', 'Aarav')" },
-          employee_id: { type: "string", description: "Optional employee ID, e.g. 'emp-6'" },
-          month: { type: "string", description: "Target month, e.g. '2026-11'" },
+          employee_name: { type: ["string", "null"], description: "Name of the employee to inspect (e.g. 'Priya Patel', 'Aarav')" },
+          employee_id: { type: ["string", "null"], description: "Optional employee ID, e.g. 'emp-6'" },
+          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
         },
       },
     },
@@ -143,7 +142,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: "string", description: "Target month, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
         },
       },
     },
@@ -480,96 +479,62 @@ async function executeTool(
       const targetQuery = args.brand_or_process || args.brand_process_id || "CS";
       const date = args.date || "2026-11-15";
 
-      const bpRaw = await sql`
-        SELECT bp.*, b.name as brand_name, p.code as process_code
-        FROM brand_processes bp
-        JOIN brands b ON bp.brand_id = b.id
-        JOIN processes p ON bp.process_id = p.id
-        WHERE bp.id ILIKE ${`%${targetQuery}%`} 
-           OR p.code ILIKE ${`%${targetQuery}%`} 
-           OR b.name ILIKE ${`%${targetQuery}%`}
-        LIMIT 1;
-      `;
-
-      if (bpRaw.length === 0) {
-        return { error: `Brand process matching "${targetQuery}" not found.` };
-      }
-
-      const targetBp: BrandProcessRule = {
-        id: bpRaw[0].id,
-        brandId: bpRaw[0].brand_id,
-        brandName: bpRaw[0].brand_name,
-        processId: bpRaw[0].process_id,
-        processCode: bpRaw[0].process_code,
-        operatingCalendar: bpRaw[0].operating_calendar,
-        minHeadcountWeekday: bpRaw[0].min_headcount_weekday,
-        minHeadcountSunday: bpRaw[0].min_headcount_sunday,
-        minHeadcountHoliday: bpRaw[0].min_headcount_holiday,
-      };
-
-      const employeesRaw = await sql`SELECT id, name, email, pod_id, active FROM employees;`;
       const allBpRaw = await sql`
         SELECT bp.*, b.name as brand_name, p.code as process_code
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
         JOIN processes p ON bp.process_id = p.id;
       `;
-      const asgnRaw = await sql`SELECT * FROM assignments;`;
-      const woRaw = await sql`SELECT * FROM weekly_offs;`;
-      const leavesRaw = await sql`SELECT * FROM leaves WHERE status = 'approved';`;
-      const compOffsRaw = await sql`SELECT * FROM comp_offs;`;
 
-      const candidates = findBackupCandidates(targetBp, date, {
-        month: date.slice(0, 7),
-        employees: employeesRaw.map((e: any) => ({ id: e.id, name: e.name, email: e.email, active: e.active })),
-        brandProcesses: allBpRaw.map((b: any) => ({
-          id: b.id,
-          brandId: b.brand_id,
-          brandName: b.brand_name,
-          processId: b.process_id,
-          processCode: b.process_code,
-          operatingCalendar: b.operating_calendar,
-          minHeadcountWeekday: b.min_headcount_weekday,
-          minHeadcountSunday: b.min_headcount_sunday,
-          minHeadcountHoliday: b.min_headcount_holiday,
-        })),
-        assignments: asgnRaw.map((a: any) => ({
-          id: a.id,
-          employeeId: a.employee_id,
-          brandProcessId: a.brand_process_id,
-          startDate: String(a.start_date).slice(0, 10),
-          endDate: a.end_date ? String(a.end_date).slice(0, 10) : null,
-          priority: a.priority,
-        })),
-        weeklyOffs: woRaw.map((w: any) => ({
-          id: w.id,
-          employeeId: w.employee_id,
-          weekday: w.weekday,
-          effectiveFrom: String(w.effective_from).slice(0, 10),
-          effectiveTo: w.effective_to ? String(w.effective_to).slice(0, 10) : null,
-        })),
-        holidays: [],
-        leaves: leavesRaw.map((l: any) => ({
-          id: l.id,
-          employeeId: l.employee_id,
-          startDate: String(l.start_date).slice(0, 10),
-          endDate: String(l.end_date).slice(0, 10),
-          type: l.type,
-          status: l.status,
-        })),
-        compOffs: compOffsRaw.map((c: any) => ({
-          id: c.id,
-          employeeId: c.employee_id,
-          date: String(c.date).slice(0, 10),
-          status: c.status,
-        })),
-      });
+      const qLower = targetQuery.toLowerCase();
+      const words = qLower.split(/\s+/).filter(Boolean);
+      const targetBp =
+        allBpRaw.find((b: any) => {
+          const combined = `${b.brand_name} ${b.process_code} ${b.id}`.toLowerCase();
+          return words.every((w: string) => combined.includes(w));
+        }) ||
+        allBpRaw.find((b: any) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(words[0])) ||
+        allBpRaw.find((b: any) => b.process_code.toLowerCase() === words[words.length - 1]) ||
+        allBpRaw[0];
+
+      const certifiedStaff = await sql`
+        SELECT DISTINCT e.id, e.name as employee_name, e.email, p.name as pod_name,
+               CASE 
+                 WHEN bp.process_id = ${targetBp.process_id} AND bp.brand_id = ${targetBp.brand_id} THEN 'PRIMARY'
+                 WHEN bp.process_id = ${targetBp.process_id} THEN 'SAME_PROCESS'
+                 ELSE 'SAME_BRAND'
+               END as qualification_reason
+        FROM assignments a
+        JOIN employees e ON a.employee_id = e.id
+        LEFT JOIN pods p ON e.pod_id = p.id
+        JOIN brand_processes bp ON a.brand_process_id = bp.id
+        WHERE (bp.process_id = ${targetBp.process_id} OR bp.brand_id = ${targetBp.brand_id})
+          AND e.active = true;
+      `;
+
+      const leavesOnDate = await sql`
+        SELECT employee_id FROM leaves 
+        WHERE status = 'approved' AND start_date <= ${date} AND end_date >= ${date};
+      `;
+      const leaveEmpIds = new Set(leavesOnDate.map((l: any) => l.employee_id));
+
+      const availableCandidates = certifiedStaff
+        .filter((c: any) => !leaveEmpIds.has(c.id))
+        .map((c: any) => ({
+          employeeId: c.id,
+          employeeName: c.employee_name,
+          email: c.email,
+          podName: c.pod_name,
+          qualificationReason: c.qualification_reason,
+        }));
 
       return {
-        brandName: targetBp.brandName,
-        processCode: targetBp.processCode,
+        brandName: targetBp.brand_name,
+        processCode: targetBp.process_code,
         date,
-        backups: candidates,
+        totalCertified: certifiedStaff.length,
+        backupsCount: availableCandidates.length,
+        backups: availableCandidates,
       };
     }
 
@@ -585,7 +550,29 @@ async function executeTool(
         WHERE c.roster_month_id = ${monthId}
         ORDER BY c.severity DESC, c.date ASC;
       `;
-      return { month, count: conflicts.length, conflicts };
+
+      const blocking = conflicts.filter((c: any) => c.severity === "blocking");
+      const warnings = conflicts.filter((c: any) => c.severity === "warning");
+
+      return {
+        month,
+        totalCount: conflicts.length,
+        blockingCount: blocking.length,
+        warningCount: warnings.length,
+        topBlockingConflicts: blocking.slice(0, 6).map((c: any) => ({
+          date: c.date ? formatDateOnly(c.date) : "Any",
+          brand: c.brand_name || "Brand",
+          process: c.process_code || "Process",
+          employee: c.employee_name || "Unassigned",
+          type: c.type,
+          message: c.message,
+          suggestedFix: c.suggested_fix,
+        })),
+        warningsSummary: warnings.slice(0, 4).map((w: any) => ({
+          date: w.date ? formatDateOnly(w.date) : "Any",
+          message: w.message,
+        })),
+      };
     }
 
     // 7. Individual Employee Schedule
