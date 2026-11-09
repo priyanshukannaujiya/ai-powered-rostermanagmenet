@@ -12,12 +12,11 @@ import {
   LeaveItem,
   CompOffItem,
 } from "@/lib/scheduler/types";
-import Anthropic from "@anthropic-ai/sdk";
 import { formatDateOnly } from "@/lib/date-utils";
 
 export const dynamic = "force-dynamic";
 
-// In-memory rate limiting: 30 requests per minute per user
+// In-memory rate limiting: 45 requests per minute per user
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 
 function checkRateLimit(userId: string): boolean {
@@ -29,13 +28,141 @@ function checkRateLimit(userId: string): boolean {
     return true;
   }
 
-  if (userRate.count >= 30) {
+  if (userRate.count >= 45) {
     return false;
   }
 
   userRate.count++;
   return true;
 }
+
+// Live OpenAI-compatible Function Tools Definition
+const toolsDefinition = [
+  {
+    type: "function",
+    function: {
+      name: "get_system_health",
+      description: "Query real-time operational coverage percentage, shift totals, and conflict counts across all brands and pods for the month.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_pod_workload",
+      description: "Analyze pod workload equity, shift counts per member, overworked/underworked staff, and weekly-off distribution across all 6 pods.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_spof_risks",
+      description: "Detect Single Point of Failure (SPOF) risks: brand processes staffed by only 1 certified team member, especially those with scheduled leaves.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_pending_leaves",
+      description: "Fetch pending leave requests currently in the queue awaiting manager or pod lead review.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "string", description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "approve_leave",
+      description: "Approve a leave request directly in PostgreSQL and execute automated incremental roster replanning. Can target by employee name or leave ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          employee_name: { type: "string", description: "Name of the staff member whose leave to approve, e.g. 'Priya' or 'Rahul'" },
+          leave_id: { type: "string", description: "Optional specific leave ID, e.g. 'leave-pending-1'" },
+          month: { type: "string", description: "Target month, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_backups",
+      description: "Discover certified cross-trained backup employees available to cover a brand process on a given date.",
+      parameters: {
+        type: "object",
+        properties: {
+          brand_or_process: { type: "string", description: "Name of the brand or process code (e.g. 'Brewhaus', 'CS', 'NDR')" },
+          date: { type: "string", description: "Target date in YYYY-MM-DD format, e.g. '2026-11-15'" },
+        },
+        required: ["brand_or_process", "date"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_employee_schedule",
+      description: "Look up an individual employee's working shifts, assigned brand, weekly offs, and approved leaves for the month.",
+      parameters: {
+        type: "object",
+        properties: {
+          employee_name: { type: "string", description: "Name of the employee to inspect (e.g. 'Priya Patel', 'Aarav')" },
+          employee_id: { type: "string", description: "Optional employee ID, e.g. 'emp-6'" },
+          month: { type: "string", description: "Target month, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_conflicts",
+      description: "Retrieve all active scheduling conflicts (blocking violations vs. soft warnings) with suggested manager fixes.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "string", description: "Target month, e.g. '2026-11'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_database_custom",
+      description: "Query structural database information regarding pods, brands, operating calendars, or public holidays.",
+      parameters: {
+        type: "object",
+        properties: {
+          entity: { type: "string", enum: ["pods", "brands", "holidays", "overview"], description: "Entity to inspect" },
+        },
+        required: ["entity"],
+      },
+    },
+  },
+];
 
 // Tool Implementations with Deep Operations Intelligence
 async function executeTool(
@@ -51,6 +178,7 @@ async function executeTool(
 
   switch (toolName) {
     // 1. Comprehensive System Health & Operations Analysis
+    case "get_system_health":
     case "get_system_analysis": {
       const monthRecord = await sql`SELECT * FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
       const days = await sql`
@@ -99,7 +227,6 @@ async function executeTool(
       const blockingConflicts = conflicts.filter((c: any) => c.severity === "blocking");
       const warnings = conflicts.filter((c: any) => c.severity === "warning");
 
-      // Coverage percentage: target is ~75% working ratio (22 days working out of 30)
       const expectedWorkingSlots = employees.length * 22;
       const coveragePercentage = expectedWorkingSlots > 0
         ? Math.min(100, Math.round((workingDays.length / expectedWorkingSlots) * 100))
@@ -124,7 +251,7 @@ async function executeTool(
           total: conflicts.length,
           blockingCount: blockingConflicts.length,
           warningCount: warnings.length,
-          blockingItems: blockingConflicts.map((c: any) => ({
+          blockingItems: blockingConflicts.slice(0, 4).map((c: any) => ({
             id: c.id,
             date: formatDateOnly(c.date),
             brand: c.brand_name || "Brand",
@@ -146,6 +273,7 @@ async function executeTool(
     }
 
     // 2. Pod Capacity & Workload Balance Analysis
+    case "get_pod_workload":
     case "get_pod_analysis": {
       const podsRaw = await sql`
         SELECT p.*, e.name as lead_name
@@ -215,7 +343,6 @@ async function executeTool(
       const stdDev = Math.sqrt(variance).toFixed(2);
       const fairnessScore = Math.max(0, Math.min(100, Math.round(100 - parseFloat(stdDev) * 12)));
 
-      // Weekly-off preference honoring rate
       let totalWoRequested = 0;
       let totalWoHonored = 0;
       for (const emp of employeesRaw) {
@@ -249,7 +376,8 @@ async function executeTool(
       };
     }
 
-    // 3. Single Point of Failure (SPOF) & Single-Resource Brand Analysis
+    // 3. Single Point of Failure (SPOF) Analysis
+    case "get_spof_risks":
     case "get_spof_analysis": {
       const brandProcesses = await sql`
         SELECT bp.*, b.name as brand_name, p.code as process_code
@@ -310,7 +438,8 @@ async function executeTool(
       };
     }
 
-    // 4. Pending Leave Approvals Queue & Simulation Impact
+    // 4. Pending Leave Approvals Queue
+    case "get_pending_leaves":
     case "get_leave_queue_analysis": {
       const pendingLeaves = await sql`
         SELECT l.*, e.name as employee_name, e.email as employee_email, p.name as pod_name
@@ -348,20 +477,22 @@ async function executeTool(
 
     // 5. Cross-Trained Backup Staff Search
     case "find_backups": {
-      const { brand_process_id, date = "2026-11-15" } = args;
+      const targetQuery = args.brand_or_process || args.brand_process_id || "CS";
+      const date = args.date || "2026-11-15";
+
       const bpRaw = await sql`
         SELECT bp.*, b.name as brand_name, p.code as process_code
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
         JOIN processes p ON bp.process_id = p.id
-        WHERE bp.id = ${brand_process_id} 
-           OR p.code ILIKE ${`%${brand_process_id}%`} 
-           OR b.name ILIKE ${`%${brand_process_id}%`}
+        WHERE bp.id ILIKE ${`%${targetQuery}%`} 
+           OR p.code ILIKE ${`%${targetQuery}%`} 
+           OR b.name ILIKE ${`%${targetQuery}%`}
         LIMIT 1;
       `;
 
       if (bpRaw.length === 0) {
-        return { error: `Brand process ${brand_process_id} not found.` };
+        return { error: `Brand process matching "${targetQuery}" not found.` };
       }
 
       const targetBp: BrandProcessRule = {
@@ -462,15 +593,24 @@ async function executeTool(
       let targetEmpId = args.employee_id;
       if (userRole === "employee") {
         targetEmpId = callerEmployeeId;
+      } else if (!targetEmpId && args.employee_name) {
+        const empLookup = await sql`
+          SELECT id, name FROM employees WHERE name ILIKE ${`%${args.employee_name}%`} LIMIT 1;
+        `;
+        if (empLookup.length > 0) {
+          targetEmpId = empLookup[0].id;
+        }
       }
+
       if (!targetEmpId) {
-        return { error: "Employee ID is required." };
+        return { error: `Employee "${args.employee_name || ""}" not found in database.` };
       }
 
       const scheduleRaw = await sql`
-        SELECT rd.date, rd.status, rd.notes, b.name as brand_name, p.code as process_code, e.name as employee_name
+        SELECT rd.date, rd.status, rd.notes, b.name as brand_name, p.code as process_code, e.name as employee_name, pod.name as pod_name
         FROM roster_days rd
         JOIN employees e ON rd.employee_id = e.id
+        LEFT JOIN pods pod ON e.pod_id = pod.id
         LEFT JOIN brand_processes bp ON rd.brand_process_id = bp.id
         LEFT JOIN brands b ON bp.brand_id = b.id
         LEFT JOIN processes p ON bp.process_id = p.id
@@ -491,12 +631,21 @@ async function executeTool(
         }
       }
 
-      return { employeeId: targetEmpId, month, schedule };
+      const workingDays = schedule.filter((s: any) => s.status === "working").length;
+      const offDays = schedule.filter((s: any) => s.status === "weekly_off").length;
+      const leaves = schedule.filter((s: any) => s.status === "leave").length;
+
+      return {
+        employeeName: scheduleRaw[0]?.employee_name || "Staff",
+        podName: scheduleRaw[0]?.pod_name || "Pod",
+        month,
+        summary: { workingDays, offDays, leaves },
+        schedule,
+      };
     }
 
     // 8. Automated Leave Approval & Incremental Replan Execution
     case "approve_leave": {
-      // Role enforcement: Managers & Pod Leads only
       if (userRole !== "manager" && userRole !== "pod_lead") {
         return {
           error: "Permission Denied: Only Operations Managers and Pod Leads are authorized to approve leave requests and trigger automated schedule replanning.",
@@ -520,7 +669,6 @@ async function executeTool(
       }
 
       if (!targetLeave && employee_name) {
-        // First look for pending leave matching the employee name
         const pendingRows = await sql`
           SELECT l.*, e.name as employee_name, e.pod_id, p.name as pod_name
           FROM leaves l
@@ -533,7 +681,6 @@ async function executeTool(
         if (pendingRows.length > 0) {
           targetLeave = pendingRows[0];
         } else {
-          // Check if there is already an approved leave for this employee
           const approvedRows = await sql`
             SELECT l.*, e.name as employee_name, e.pod_id, p.name as pod_name
             FROM leaves l
@@ -558,7 +705,6 @@ async function executeTool(
         }
       }
 
-      // If still not found and no specific name requested, pick the first pending leave from queue
       if (!targetLeave) {
         const anyPending = await sql`
           SELECT l.*, e.name as employee_name, e.pod_id, p.name as pod_name
@@ -582,7 +728,6 @@ async function executeTool(
         }
       }
 
-      // Pod Lead Scope check
       if (userRole === "pod_lead") {
         const podRows = await sql`SELECT lead_employee_id FROM pods WHERE id = ${targetLeave.pod_id} LIMIT 1;`;
         if (podRows.length === 0 || podRows[0].lead_employee_id !== callerEmployeeId) {
@@ -593,7 +738,6 @@ async function executeTool(
         }
       }
 
-      // Execute approval and automated replan
       const result = await approveLeaveAndReplan({
         leaveId: targetLeave.id,
         reviewerUserId: userId || "user-mgr",
@@ -634,6 +778,43 @@ async function executeTool(
       };
     }
 
+    // 9. Structural Database Lookups
+    case "query_database_custom": {
+      const { entity } = args;
+      if (entity === "pods") {
+        const pods = await sql`
+          SELECT p.id, p.name, e.name as lead_name, COUNT(emp.id) as member_count
+          FROM pods p
+          LEFT JOIN employees e ON p.lead_employee_id = e.id
+          LEFT JOIN employees emp ON emp.pod_id = p.id
+          GROUP BY p.id, p.name, e.name
+          ORDER BY p.name;
+        `;
+        return { pods };
+      } else if (entity === "brands") {
+        const brands = await sql`
+          SELECT b.id, b.name, bp.operating_calendar, p.code as process_code, bp.min_headcount_weekday, bp.min_headcount_sunday
+          FROM brands b
+          JOIN brand_processes bp ON bp.brand_id = b.id
+          JOIN processes p ON bp.process_id = p.id
+          ORDER BY b.name;
+        `;
+        return { brands };
+      } else if (entity === "holidays") {
+        const holidays = await sql`SELECT * FROM holidays ORDER BY date;`;
+        return { holidays };
+      } else {
+        const counts = await sql`
+          SELECT 
+            (SELECT COUNT(*) FROM employees) as total_employees,
+            (SELECT COUNT(*) FROM pods) as total_pods,
+            (SELECT COUNT(*) FROM brands) as total_brands,
+            (SELECT COUNT(*) FROM leaves WHERE status = 'pending') as pending_leaves;
+        `;
+        return { counts: counts[0] };
+      }
+    }
+
     default:
       return { error: `Unknown tool ${toolName}` };
   }
@@ -645,7 +826,7 @@ export async function POST(req: NextRequest) {
 
   if (!checkRateLimit(user!.id)) {
     return NextResponse.json(
-      { error: "Rate limit exceeded. You can send up to 30 queries per minute." },
+      { error: "Rate limit exceeded. You can send up to 45 queries per minute." },
       { status: 429 }
     );
   }
@@ -657,424 +838,200 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Message string is required" }, { status: 400 });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.GROQ_API_KEY || "";
+  const apiKey = process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY || "";
 
   const systemPrompt = `You are the AI Operations Intelligence Copilot for the Smart Roster Management System.
-You assist Operations Managers and Pod Leads by providing live data audits, constraint verification, capacity balancing, and risk mitigation across D2C brands.
+You are directly connected to the LIVE PostgreSQL database and deterministic scheduling graph.
+User session: ${user!.email} (Role: ${user!.role})
+Current month cycle: ${month}
 
-Operational Domain Rules:
-1. Deterministic constraint engine: 1 primary shift status per employee per calendar date.
-2. Minimum headcount thresholds: Weekday requirements vs Sunday/Holiday operating requirements per brand process.
-3. Single Point of Failure (SPOF): Brands with only 1 certified team member are high risk when leaves are approved.
-4. Role Scoping:
-   - Managers: Full system view across all 6 pods, 12 brands, master data, publish freeze.
-   - Pod Leads: Pod capacity, shift equity, leave replanning within their pod.
-   - Employees: Strict self-schedule view.
-
-Format your analysis clearly in Markdown with headers (###), bold values, bullet points, and actionable takeaways.`;
-
-  const queryLower = message.toLowerCase();
+Operational Intelligence Directives:
+1. When asked about system health, pod workloads, conflicts, employee schedules, or leave approvals, USE THE CORRESPONDING DATABASE TOOLS to query live data.
+2. For leave approvals:
+   - Call the approve_leave tool. This actually executes the approval in PostgreSQL and replans future shifts.
+   - Non-manager/non-lead users cannot approve leaves.
+3. Be professional, direct, and concise. Format responses in clean GitHub Markdown with headers (###), bold values, and bullet points. Never hallucinate data — always base your conclusions on live tool outputs.`;
 
   try {
-    let toolResult: any = null;
-    let toolUsed = "";
-
-    // Intelligent Query Classification
-    const isApprove =
-      queryLower.includes("approve") ||
-      queryLower.includes("aproov") ||
-      queryLower.includes("accept") ||
-      queryLower.includes("grant");
-    const isLeave =
-      queryLower.includes("leave") ||
-      queryLower.includes("leaf") ||
-      queryLower.includes("priya") ||
-      queryLower.includes("rahul") ||
-      queryLower.includes("manish") ||
-      queryLower.includes("request");
-
-    if (isApprove && isLeave) {
-      toolUsed = "approve_leave";
-      let targetEmployeeName = "";
-      if (queryLower.includes("priya")) targetEmployeeName = "Priya";
-      else if (queryLower.includes("rahul")) targetEmployeeName = "Rahul";
-      else if (queryLower.includes("manish")) targetEmployeeName = "Manish";
-      else if (queryLower.includes("aarav")) targetEmployeeName = "Aarav";
-      else if (queryLower.includes("sneha")) targetEmployeeName = "Sneha";
-      else if (queryLower.includes("vikram")) targetEmployeeName = "Vikram";
-      else if (queryLower.includes("ananya")) targetEmployeeName = "Ananya";
-
-      toolResult = await executeTool(
-        "approve_leave",
-        { month, employee_name: targetEmployeeName },
-        user!.role,
-        user!.employeeId,
-        user!.id
-      );
-    } else if (
-      queryLower.includes("system") ||
-      queryLower.includes("health") ||
-      queryLower.includes("audit") ||
-      queryLower.includes("overview") ||
-      queryLower.includes("summary") ||
-      queryLower.includes("analysis") ||
-      queryLower.includes("kpi")
-    ) {
-      toolUsed = "get_system_analysis";
-      toolResult = await executeTool("get_system_analysis", { month }, user!.role, user!.employeeId, user!.id);
-    } else if (
-      queryLower.includes("pod") ||
-      queryLower.includes("workload") ||
-      queryLower.includes("capacity") ||
-      queryLower.includes("equity") ||
-      queryLower.includes("overwork") ||
-      queryLower.includes("team") ||
-      queryLower.includes("fair") ||
-      queryLower.includes("preference") ||
-      queryLower.includes("weekly off") ||
-      queryLower.includes("distribution")
-    ) {
-      toolUsed = "get_pod_analysis";
-      toolResult = await executeTool("get_pod_analysis", { month }, user!.role, user!.employeeId, user!.id);
-    } else if (
-      queryLower.includes("spof") ||
-      queryLower.includes("single") ||
-      queryLower.includes("risk") ||
-      queryLower.includes("sole") ||
-      queryLower.includes("bottle")
-    ) {
-      toolUsed = "get_spof_analysis";
-      toolResult = await executeTool("get_spof_analysis", { month }, user!.role, user!.employeeId, user!.id);
-    } else if (
-      queryLower.includes("leave") ||
-      queryLower.includes("leaf") ||
-      queryLower.includes("queue") ||
-      queryLower.includes("pending") ||
-      queryLower.includes("approval") ||
-      queryLower.includes("replan")
-    ) {
-      toolUsed = "get_leave_queue_analysis";
-      toolResult = await executeTool("get_leave_queue_analysis", { month }, user!.role, user!.employeeId, user!.id);
-    } else if (
-      queryLower.includes("backup") ||
-      queryLower.includes("cover") ||
-      queryLower.includes("who covers") ||
-      queryLower.includes("who can") ||
-      queryLower.includes("candidate")
-    ) {
-      toolUsed = "find_backups";
-      const dateMatch = message.match(/(\d{4}-\d{2}-\d{2})/) || [null, "2026-11-15"];
-      const date = dateMatch[1] || "2026-11-15";
-      const bpId = queryLower.includes("ndr")
-        ? "proc-ndr"
-        : queryLower.includes("brewhaus")
-        ? "Brewhaus"
-        : queryLower.includes("lumora")
-        ? "Lumora"
-        : queryLower.includes("cs")
-        ? "proc-cs"
-        : "proc-ndr";
-      toolResult = await executeTool("find_backups", { brand_process_id: bpId, date }, user!.role, user!.employeeId, user!.id);
-    } else if (
-      queryLower.includes("conflict") ||
-      queryLower.includes("explain") ||
-      queryLower.includes("issue") ||
-      queryLower.includes("blocking")
-    ) {
-      toolUsed = "get_conflicts";
-      toolResult = await executeTool("get_conflicts", { month }, user!.role, user!.employeeId, user!.id);
-    } else if (
-      queryLower.includes("my schedule") ||
-      queryLower.includes("my roster") ||
-      user!.role === "employee"
-    ) {
-      toolUsed = "get_employee_schedule";
-      toolResult = await executeTool("get_employee_schedule", { employee_id: user!.employeeId, month }, user!.role, user!.employeeId, user!.id);
-    } else {
-      toolUsed = "get_system_analysis";
-      toolResult = await executeTool("get_system_analysis", { month }, user!.role, user!.employeeId, user!.id);
-    }
-
-    // Call LLM API if key is present
     let replyText = "";
+    let systemReflected = false;
+    let toolUsed = "";
+    let toolResult: any = null;
 
-    if (apiKey.startsWith("gsk_")) {
-      const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    // Real OpenAI-compatible Function Calling Loop using Groq (gpt-oss-120b / qwen3.8-27b)
+    if (apiKey) {
+      const messages: any[] = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message },
+      ];
+
+      let modelChoice = "openai/gpt-oss-120b";
+      let firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            {
-              role: "system",
-              content: `${systemPrompt}\n\nLive Database Analysis for ${month} (${user!.role} role):\n${JSON.stringify(toolResult, null, 2)}`,
-            },
-            { role: "user", content: message },
-          ],
+          model: modelChoice,
+          messages,
+          tools: toolsDefinition,
+          tool_choice: "auto",
           temperature: 0.2,
-          max_tokens: 800,
         }),
       });
 
-      if (groqRes.ok) {
-        const groqData = await groqRes.json();
-        replyText = groqData.choices?.[0]?.message?.content || "";
+      if (!firstRes.ok) {
+        modelChoice = "qwen/qwen3.8-27b";
+        firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: modelChoice,
+            messages,
+            tools: toolsDefinition,
+            tool_choice: "auto",
+            temperature: 0.2,
+          }),
+        });
       }
-    } else if (apiKey.startsWith("sk-ant-")) {
-      const anthropic = new Anthropic({ apiKey });
-      const claudeRes = await anthropic.messages.create({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 800,
-        system: `${systemPrompt}\n\nLive Database Analysis for ${month} (${user!.role} role):\n${JSON.stringify(toolResult, null, 2)}`,
-        messages: [{ role: "user", content: message }],
-      });
 
-      const block = claudeRes.content[0];
-      if (block.type === "text") {
-        replyText = block.text;
+      if (firstRes.ok) {
+        const firstData = await firstRes.json();
+        const assistantMsg = firstData.choices?.[0]?.message;
+
+        if (assistantMsg?.tool_calls && assistantMsg.tool_calls.length > 0) {
+          messages.push(assistantMsg);
+
+          for (const call of assistantMsg.tool_calls) {
+            const funcName = call.function.name;
+            let parsedArgs: any = {};
+            try {
+              parsedArgs = JSON.parse(call.function.arguments || "{}");
+            } catch {}
+
+            toolUsed = funcName;
+            const res = await executeTool(
+              funcName,
+              { ...parsedArgs, month },
+              user!.role,
+              user!.employeeId,
+              user!.id
+            );
+            toolResult = res;
+            if (res?.systemReflected) systemReflected = true;
+
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: JSON.stringify(res),
+            });
+          }
+
+          // Second pass: Model synthesizes live database records into a genuine, real response
+          const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: modelChoice,
+              messages,
+              temperature: 0.2,
+            }),
+          });
+
+          if (secondRes.ok) {
+            const secondData = await secondRes.json();
+            replyText = secondData.choices?.[0]?.message?.content || "";
+          }
+        } else if (assistantMsg?.content) {
+          replyText = assistantMsg.content;
+        }
       }
     }
 
-    // High-Precision Local Deterministic Intelligence Engine
-    // Generates rich, executive-grade analysis even if external LLM API is offline
+    // High-Precision Local Deterministic Fallback if API key is temporarily unavailable
     if (!replyText) {
-      if (toolUsed === "get_system_analysis" && toolResult) {
-        const t = toolResult.totals;
-        const c = toolResult.conflicts;
-        replyText = `### 📊 System Operations & Coverage Health (${month})
+      const queryLower = message.toLowerCase();
+      const isApprove =
+        queryLower.includes("approve") ||
+        queryLower.includes("aproov") ||
+        queryLower.includes("accept") ||
+        queryLower.includes("grant");
+      const isLeave =
+        queryLower.includes("leave") ||
+        queryLower.includes("leaf") ||
+        queryLower.includes("priya") ||
+        queryLower.includes("rahul") ||
+        queryLower.includes("manish") ||
+        queryLower.includes("request");
 
-**Executive Summary:**
-• **Overall Coverage Health**: **${toolResult.coveragePercentage}%** (${t.workingShifts} active shifts scheduled across 30 days)
-• **Active Headcount**: **${t.employees} staff** organized into **${t.pods} operational pods**
-• **D2C Brand Coverage**: **${t.brands} brands** (${t.brandProcesses} operating rules)
-• **Roster Status**: **${toolResult.status.toUpperCase()}**
+      if (isApprove && isLeave) {
+        toolUsed = "approve_leave";
+        let targetEmployeeName = "";
+        if (queryLower.includes("priya")) targetEmployeeName = "Priya";
+        else if (queryLower.includes("rahul")) targetEmployeeName = "Rahul";
+        else if (queryLower.includes("manish")) targetEmployeeName = "Manish";
 
----
-
-### 🚨 Conflict & Constraint Audit
-• **Blocking Conflicts**: **${c.blockingCount}** requiring immediate reassignment
-• **Soft Warnings**: **${c.warningCount}** (preference / consecutive days)
-
-${
-  c.blockingItems.length > 0
-    ? `**Top Priority Blocking Violations:**\n` +
-      c.blockingItems
-        .slice(0, 3)
-        .map(
-          (b: any) =>
-            `• **${b.date}** — *${b.brand} (${b.process})*: ${b.message}\n  💡 *Fix:* ${b.suggestedFix || "Assign cross-trained pod backup"}`
-        )
-        .join("\n\n")
-    : `✅ *All active brand processes meet weekday and Sunday minimum staffing thresholds.*`
-}
-
----
-
-### 📋 Approvals & Pipeline Queue
-• **Pending Leave Requests**: **${toolResult.pendingLeavesCount} pending review**
-• **Action Recommendation**: Review the Approvals Queue to simulate replan diffs before publishing.`;
-      } else if (toolUsed === "get_pod_analysis" && toolResult) {
-        const podsList = toolResult.pods || [];
-        const eq = toolResult.equity || {};
-        const podSummaries = podsList
-          .map((p: any) => {
-            const highLoad = p.members.filter((m: any) => m.overworked).map((m: any) => m.name);
-            const lowLoad = p.members.filter((m: any) => m.underworked).map((m: any) => m.name);
-            return `• **${p.name}** (Lead: *${p.leadName}*):
-  - **${p.memberCount} members** | Total Shifts: **${p.totalPodShifts}** (Avg: **${p.avgShiftsPerMember}** shifts/staff)
-  ${highLoad.length > 0 ? `  ⚠️ High shift load (>24): ${highLoad.join(", ")}\n` : ""}${lowLoad.length > 0 ? `  ℹ️ Low shift load (<18): ${lowLoad.join(", ")}\n` : ""}`;
-          })
-          .join("\n");
-
-        replyText = `### 👥 Pod Capacity & Fair Workload Distribution (${month})
-
-**Workload Distribution Across ${toolResult.podCount} Pods:**
-
-${podSummaries}
-
----
-
-### ⚖️ Shift Equity & Weekly-Off Preference Index
-• **Fairness Score**: **${eq.fairnessScore ?? 92} / 100** (Shift Deviation: **±${eq.stdDev ?? "1.4"} days**)
-• **Working Shift Range**: Min **${eq.minShifts ?? 18} shifts** | Max **${eq.maxShifts ?? 23} shifts** (Target: **${eq.meanShifts ?? 21.0}**)
-• **Weekly-Off Preference Honoring Rate**: **${eq.preferenceHonoredRate ?? 94}%**
-• **Fatigue Guardrail**: Zero staff scheduled $\\ge 6$ consecutive days without a mandatory rest day.
-
-💡 **Operational Strategy:**
-Weekly offs are staggered across Sundays (0), Mondays (1), and Saturdays (6) to guarantee single-resource coverage while strictly honoring at least 4 mandatory weekly offs per employee every month.`;
-      } else if (toolUsed === "get_spof_analysis" && toolResult) {
-        const risks = toolResult.risks || [];
-        const critical = risks.filter((r: any) => r.riskLevel === "CRITICAL");
-        const high = risks.filter((r: any) => r.riskLevel === "HIGH");
-
-        replyText = `### 🛡️ Single Point of Failure (SPOF) Risk Assessment
-
-**Identified Single-Resource Brands:**
-Found **${toolResult.spofCount} brand-process lines** with only 1 dedicated employee.
-
-${
-  critical.length > 0
-    ? `#### 🔴 Critical Risks (Leave Scheduled with No Primary Coverage):
-${critical
-  .map(
-    (c: any) =>
-      `• **${c.brandName} (${c.processCode})**: Dedicated to **${c.primaryEmployee}**\n  - Scheduled Leave: *${c.scheduledLeaves.map((l: any) => l.dates).join(", ")}*\n  - Operating Req: ${c.minHeadcountWeekday} weekday / ${c.minHeadcountSunday} Sun`
-  )
-  .join("\n")}`
-    : `✅ *No dedicated single-resource brand has an overlapping approved leave.*`
-}
-
-#### 🟡 Monitored Single-Resource Brands:
-${high
-  .slice(0, 4)
-  .map(
-    (h: any) =>
-      `• **${h.brandName} (${h.processCode})** — Lead Staff: **${h.primaryEmployee}** (${h.operatingCalendar} calendar)`
-  )
-  .join("\n")}
-
-💡 **Mitigation**: Cross-train at least 1 secondary colleague in each pod to cover unexpected absences.`;
-      } else if (toolUsed === "get_leave_queue_analysis" && toolResult) {
-        const leaves = toolResult.leaves || [];
-        replyText = `### ⏳ Pending Leave Approvals & Replan Queue
-
-**Queue Status:** **${toolResult.pendingCount} pending requests** awaiting pod lead / manager review.
-
-${
-  leaves.length > 0
-    ? leaves
-        .map(
-          (l: any) =>
-            `• **${l.employee}** (${l.pod || "Pod"}):
-  - **Dates**: ${l.dates} (${l.type})
-  - **Reason**: "${l.reason}"`
-        )
-        .join("\n\n")
-    : `✅ *The approvals queue is clean. No pending requests require simulation.*`
-}
-
-💡 **Next Step**: Click **"Simulate Replan & Approve"** in the Approvals Queue to preview shift diffs before applying.`;
-      } else if (toolUsed === "find_backups" && toolResult?.backups) {
-        const candidates = toolResult.backups.map(
-          (b: any) => `• **${b.employeeName}** — ${b.qualificationReason}`
+        toolResult = await executeTool(
+          "approve_leave",
+          { month, employee_name: targetEmployeeName },
+          user!.role,
+          user!.employeeId,
+          user!.id
         );
-        replyText = `### 🔍 Qualified Backup Candidates
-**Target Brand Process**: **${toolResult.brandName || "Process"}** (${toolResult.processCode})
-**Target Date**: **${toolResult.date}**
-
-${
-  candidates.length > 0
-    ? `**Available Cross-Trained Colleagues:**\n${candidates.join("\n")}\n\n💡 *Reassignment can be executed directly in the Roster Grid or during Leave Simulation.*`
-    : `⚠️ *No qualified cross-trained colleague found on this date. A manager override may be required.*`
-}`;
-      } else if (toolUsed === "get_conflicts" && toolResult?.conflicts) {
-        const topConflicts = toolResult.conflicts
-          .slice(0, 4)
-          .map(
-            (c: any) =>
-              `• **[${c.severity.toUpperCase()}]** *${formatDateOnly(c.date)}* (${c.brand_name || "Brand"} ${c.process_code}):\n  ${c.message}\n  💡 *Fix:* ${c.suggested_fix}`
-          )
-          .join("\n\n");
-        replyText = `### 🚨 Roster Conflicts Breakdown (${month})
-Found **${toolResult.count} registered conflict(s)**.
-
-${topConflicts}
-
-To resolve, use the cell edit modal in the **Roster Grid** or approve replans in the **Approvals Queue**.`;
-      } else if (toolUsed === "get_employee_schedule" && toolResult?.schedule) {
-        const workingDays = toolResult.schedule.filter((s: any) => s.status === "working").length;
-        const offDays = toolResult.schedule.filter((s: any) => s.status === "weekly_off").length;
-        const leaves = toolResult.schedule.filter((s: any) => s.status === "leave").length;
-        replyText = `### 📅 Personal Shift Summary (${month})
-**Employee**: **${toolResult.schedule[0]?.employee_name || "You"}**
-
-• **Working Shifts**: **${workingDays} days**
-• **Weekly Offs**: **${offDays} rest days**
-• **Approved Leave**: **${leaves} days**
-
-Visit the **Employee Portal (/me)** for the interactive monthly calendar view and leave submission.`;
-      } else if (toolUsed === "approve_leave" && toolResult) {
-        if (toolResult.error) {
-          replyText = `### ⛔ Authorization Notice
-${toolResult.error}
-
-*Please switch to an authorized manager account or request your pod lead to review.*`;
-        } else if (toolResult.alreadyApproved) {
-          replyText = `### ℹ️ Leave Already Approved
-**Staff Member**: **${toolResult.employeeName}** (${toolResult.podName || "Pod"})
-• **Leave Period**: **${toolResult.startDate} to ${toolResult.endDate}** (${toolResult.leaveType || "planned"})
-• **Current Status**: **APPROVED** in live database
-
-✅ The November 2026 roster has already factored in this absence and marked shift cells accordingly.`;
-        } else if (toolResult.noPending) {
-          replyText = `### 📋 Approvals Queue Status
-${toolResult.message}
-
-All submitted leave requests for this period have either been approved or reviewed. Check **Approvals Queue (/manager/approvals)** to inspect historical requests or submit a new request via the Employee Portal.`;
-        } else if (toolResult.approved) {
-          replyText = `### ✅ Leave Approved & Roster Replanned
-
-• **Staff Member**: **${toolResult.employeeName}** (${toolResult.podName || "Pod"})
-• **Approved Period**: **${toolResult.startDate} to ${toolResult.endDate}** (${toolResult.leaveType || "planned"})
-• **Reason**: *"${toolResult.reason || "Approved by Operations Copilot"}"*
-• **Database Status**: **APPROVED & COMMITTED**
-
----
-
-### 🔄 Live Roster Replan Results (${month})
-• **Shifts Transitioned**: **${toolResult.changedDaysCount} shift slots** updated to Leave status
-• **Constraint Re-evaluation**: Re-verified weekday & weekend minimum staffing thresholds
-${
-  toolResult.newConflictsCount > 0
-    ? `• ⚠️ **New Coverage Conflicts**: **${toolResult.newConflictsCount}**\n` +
-      toolResult.newConflicts
-        .map(
-          (c: any) =>
-            `  - **${c.date}**: ${c.message}\n    💡 *Suggested Fix:* ${c.suggestedFix || "Assign pod backup"}`
-        )
-        .join("\n")
-    : `• ✅ **Zero Blocking Conflicts**: All brand processes continue to meet operating headcount thresholds.`
-}
-
-${
-  toolResult.suggestedBackups && toolResult.suggestedBackups.length > 0
-    ? `\n### 🛡️ Recommended Cross-Trained Coverage:\n` +
-      toolResult.suggestedBackups
-        .map(
-          (sb: any) =>
-            `• **${sb.date}** (*${sb.brandName}*): Backup candidates → **${sb.candidates.map((c: any) => c.employeeName).join(", ")}**`
-        )
-        .join("\n")
-    : ""
-}
-
-🚀 **System Reflected**: Live database records have been updated. The Roster Grid, Approvals Queue, and Employee Portal have automatically re-synchronized.`;
-        }
+        if (toolResult?.systemReflected) systemReflected = true;
+      } else if (
+        queryLower.includes("pod") ||
+        queryLower.includes("workload") ||
+        queryLower.includes("capacity") ||
+        queryLower.includes("equity") ||
+        queryLower.includes("fair")
+      ) {
+        toolUsed = "get_pod_workload";
+        toolResult = await executeTool("get_pod_workload", { month }, user!.role, user!.employeeId, user!.id);
+      } else if (
+        queryLower.includes("spof") ||
+        queryLower.includes("single") ||
+        queryLower.includes("risk")
+      ) {
+        toolUsed = "get_spof_risks";
+        toolResult = await executeTool("get_spof_risks", { month }, user!.role, user!.employeeId, user!.id);
       } else {
-        replyText = `### 📊 Operations Intelligence (${month})
-Analyzed the live roster constraint graph for **${month}**. The system has **32 active staff**, **6 pods**, and **12 D2C brand operating rules**.
+        toolUsed = "get_system_health";
+        toolResult = await executeTool("get_system_health", { month }, user!.role, user!.employeeId, user!.id);
+      }
 
-Ask me for:
-• **"System health audit"** — Full coverage and conflict metrics
-• **"Pod workload analysis"** — Capacity distribution by pod
-• **"SPOF risks"** — Single-resource brand vulnerability report
-• **"Pending leave queue"** — Impact simulation of open requests`;
+      if (toolUsed === "approve_leave" && toolResult) {
+        if (toolResult.error) {
+          replyText = `### ⛔ Authorization Notice\n${toolResult.error}`;
+        } else if (toolResult.alreadyApproved) {
+          replyText = `### ℹ️ Leave Already Approved\n**Staff**: **${toolResult.employeeName}** (${toolResult.podName})\n• **Dates**: ${toolResult.startDate} to ${toolResult.endDate} (${toolResult.leaveType})\n• Already marked as APPROVED in PostgreSQL.`;
+        } else if (toolResult.approved) {
+          replyText = `### ✅ Leave Approved & Roster Replanned\n• **Staff**: **${toolResult.employeeName}** (${toolResult.podName})\n• **Dates**: ${toolResult.startDate} to ${toolResult.endDate}\n• **Shifts Updated**: ${toolResult.changedDaysCount} shifts marked as Leave.\n• **PostgreSQL Status**: Committed & Re-evaluated.`;
+        }
+      } else if (toolUsed === "get_pod_workload" && toolResult) {
+        replyText = `### 👥 Pod Workload & Fairness (${month})\n• **Fairness Score**: ${toolResult.equity?.fairnessScore ?? 92}/100\n• **Mean Shifts**: ${toolResult.equity?.meanShifts} shifts/staff\n• **Weekly-Off Honoring Rate**: ${toolResult.equity?.preferenceHonoredRate}%`;
+      } else {
+        replyText = `### 📊 Live Operations Audit (${month})\n• **Coverage Health**: **${toolResult?.coveragePercentage ?? 98}%**\n• **Active Staff**: ${toolResult?.totals?.employees ?? 32} across ${toolResult?.totals?.pods ?? 6} pods\n• **Conflicts**: ${toolResult?.conflicts?.blockingCount ?? 0} blocking / ${toolResult?.conflicts?.warningCount ?? 0} warnings.`;
       }
     }
 
     return NextResponse.json({
       reply: replyText,
       toolUsed,
+      systemReflected,
       data: toolResult,
     });
   } catch (error: any) {
     console.error("Assistant API error:", error);
     return NextResponse.json({
-      reply: `### ⚠️ Operations Copilot Status
-Encountered an issue processing query: ${error.message}. Please inspect the Roster Grid or Approvals Queue directly.`,
+      reply: `### ⚠️ Operations Copilot Status\nEncountered an issue processing live query: ${error.message}. Please inspect the Roster Grid directly.`,
     });
   }
 }
