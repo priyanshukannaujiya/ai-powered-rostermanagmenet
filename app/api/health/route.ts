@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
+import "@/lib/db/dns-patch";
 
 export const dynamic = "force-dynamic";
 
