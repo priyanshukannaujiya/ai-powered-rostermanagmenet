@@ -261,6 +261,7 @@ Click any quick-audit chip below or ask any operational query!`,
   const promptChips = [
     { label: "Approve Pending Leave", icon: FileCheck2, prompt: "Approve pending leave request and replan future shifts" },
     { label: "Approve Priya's Leave", icon: Check, prompt: "Approve leave for Priya Patel" },
+    { label: "Weekly-Off Equity & Fairness", icon: Users2, prompt: "Analyze employee preferences and fair weekly-off distribution across pods" },
     { label: "System Health Audit", icon: BarChart3, prompt: "Give me a full system health audit for November 2026" },
     { label: "Pod Workload & Capacity", icon: Users2, prompt: "Analyze pod workload, shift equity, and capacity distribution" },
     { label: "SPOF Risk Analysis", icon: AlertTriangle, prompt: "Which single-resource brands are at risk if staff take leave?" },

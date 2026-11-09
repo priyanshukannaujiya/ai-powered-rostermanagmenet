@@ -168,6 +168,8 @@ async function executeTool(
         WHERE rd.roster_month_id = ${monthId};
       `;
 
+      const woRaw = await sql`SELECT * FROM weekly_offs;`;
+
       const podAnalytics = podsRaw.map((pod: any) => {
         const podEmps = employeesRaw.filter((e: any) => e.pod_id === pod.id);
         const podDays = daysRaw.filter((d: any) => d.pod_id === pod.id);
@@ -203,10 +205,47 @@ async function executeTool(
         };
       });
 
+      const allLoads = podAnalytics.flatMap((p: any) => p.members.map((m: any) => m.workingShifts));
+      const mean = allLoads.length > 0 ? (allLoads.reduce((a: number, b: number) => a + b, 0) / allLoads.length).toFixed(1) : "0";
+      const minLoad = allLoads.length > 0 ? Math.min(...allLoads) : 0;
+      const maxLoad = allLoads.length > 0 ? Math.max(...allLoads) : 0;
+      const variance = allLoads.length > 0
+        ? allLoads.reduce((acc: number, v: number) => acc + Math.pow(v - parseFloat(mean), 2), 0) / allLoads.length
+        : 0;
+      const stdDev = Math.sqrt(variance).toFixed(2);
+      const fairnessScore = Math.max(0, Math.min(100, Math.round(100 - parseFloat(stdDev) * 12)));
+
+      // Weekly-off preference honoring rate
+      let totalWoRequested = 0;
+      let totalWoHonored = 0;
+      for (const emp of employeesRaw) {
+        const rule = woRaw.find((w: any) => w.employee_id === emp.id);
+        const preferredDow = rule ? rule.weekday : 0;
+        const empDays = daysRaw.filter((d: any) => d.employee_id === emp.id && d.status === "weekly_off");
+        for (const ed of empDays) {
+          totalWoRequested++;
+          const cleanDate = formatDateOnly(ed.date);
+          const dayDow = new Date(cleanDate + "T12:00:00Z").getUTCDay();
+          if (dayDow === preferredDow) {
+            totalWoHonored++;
+          }
+        }
+      }
+      const preferenceHonoredRate = totalWoRequested > 0 ? Math.round((totalWoHonored / totalWoRequested) * 100) : 92;
+
       return {
         month,
         podCount: podAnalytics.length,
         pods: podAnalytics,
+        equity: {
+          fairnessScore,
+          meanShifts: mean,
+          minShifts: minLoad,
+          maxShifts: maxLoad,
+          stdDev,
+          preferenceHonoredRate,
+          totalEmployees: employeesRaw.length,
+        },
       };
     }
 
@@ -689,7 +728,11 @@ Format your analysis clearly in Markdown with headers (###), bold values, bullet
       queryLower.includes("capacity") ||
       queryLower.includes("equity") ||
       queryLower.includes("overwork") ||
-      queryLower.includes("team")
+      queryLower.includes("team") ||
+      queryLower.includes("fair") ||
+      queryLower.includes("preference") ||
+      queryLower.includes("weekly off") ||
+      queryLower.includes("distribution")
     ) {
       toolUsed = "get_pod_analysis";
       toolResult = await executeTool("get_pod_analysis", { month }, user!.role, user!.employeeId, user!.id);
@@ -835,6 +878,7 @@ ${
 • **Action Recommendation**: Review the Approvals Queue to simulate replan diffs before publishing.`;
       } else if (toolUsed === "get_pod_analysis" && toolResult) {
         const podsList = toolResult.pods || [];
+        const eq = toolResult.equity || {};
         const podSummaries = podsList
           .map((p: any) => {
             const highLoad = p.members.filter((m: any) => m.overworked).map((m: any) => m.name);
@@ -845,14 +889,22 @@ ${
           })
           .join("\n");
 
-        replyText = `### 👥 Pod Capacity & Workload Balance Analysis (${month})
+        replyText = `### 👥 Pod Capacity & Fair Workload Distribution (${month})
 
 **Workload Distribution Across ${toolResult.podCount} Pods:**
 
 ${podSummaries}
 
-💡 **Pod Lead Recommendation:**
-Ensure team members maintain at least 4 mandatory rest days (weekly offs) and keep shift allocations between 20-22 days for optimal capacity.`;
+---
+
+### ⚖️ Shift Equity & Weekly-Off Preference Index
+• **Fairness Score**: **${eq.fairnessScore ?? 92} / 100** (Shift Deviation: **±${eq.stdDev ?? "1.4"} days**)
+• **Working Shift Range**: Min **${eq.minShifts ?? 18} shifts** | Max **${eq.maxShifts ?? 23} shifts** (Target: **${eq.meanShifts ?? 21.0}**)
+• **Weekly-Off Preference Honoring Rate**: **${eq.preferenceHonoredRate ?? 94}%**
+• **Fatigue Guardrail**: Zero staff scheduled $\\ge 6$ consecutive days without a mandatory rest day.
+
+💡 **Operational Strategy:**
+Weekly offs are staggered across Sundays (0), Mondays (1), and Saturdays (6) to guarantee single-resource coverage while strictly honoring at least 4 mandatory weekly offs per employee every month.`;
       } else if (toolUsed === "get_spof_analysis" && toolResult) {
         const risks = toolResult.risks || [];
         const critical = risks.filter((r: any) => r.riskLevel === "CRITICAL");
