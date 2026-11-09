@@ -201,3 +201,4 @@ export function checkCapacity(
 
   return { blockingConflicts, shortageMap };
 }
+

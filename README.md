@@ -176,3 +176,4 @@ The application has been verified against the complete acceptance scenario:
 4. **Replan & Backup Suggestion**: Approving a leave in `/manager/approvals` simulates the impact on future unpinned days, preserves past days, and surfaces cross-trained colleagues (Rahul Verma, Sneha Rao).
 5. **AI Assistant Introspection**: Asked *"Who covers NDR on Sunday 15 Nov?"*, the assistant executes read-only tool introspection and provides available cross-trained options.
 6. **Role Isolation in Employee Portal**: Logging in as Priya (`/me`) displays strictly her personal calendar, approved leaves, and leave request form, with zero access to company-wide rosters or other employee data.
+

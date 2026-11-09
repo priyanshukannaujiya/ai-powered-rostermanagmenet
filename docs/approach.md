@@ -15,3 +15,4 @@ Key design principles:
 - **Authentication & RBAC**: Auth.js (NextAuth v5) with JWT strategy and credentials provider. Role-based access control enforces `manager`, `pod_lead`, and `employee` boundaries in both middleware and server-side endpoints.
 - **Data Synchronization**: SWR with 20-second polling intervals (`refreshInterval: 20000`), `revalidateOnFocus`, optimistic updates, and conflict toast notifications.
 - **AI Assistant**: Claude / Groq tool-calling agent with strict read-only introspection capabilities scoped by caller role.
+

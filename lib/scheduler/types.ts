@@ -151,3 +151,4 @@ export interface BackupCandidate {
   qualificationReason: "SAME_PROCESS" | "SAME_BRAND" | "CROSS_TRAINED";
   currentLoadThisMonth: number;
 }
+

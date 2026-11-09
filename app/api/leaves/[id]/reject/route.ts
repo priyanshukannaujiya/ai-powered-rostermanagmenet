@@ -47,3 +47,4 @@ export async function POST(
     return NextResponse.json({ error: error.message || "Failed to reject leave" }, { status: 500 });
   }
 }
+

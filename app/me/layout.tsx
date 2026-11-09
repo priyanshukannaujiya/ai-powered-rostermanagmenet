@@ -44,3 +44,4 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
     </div>
   );
 }
+

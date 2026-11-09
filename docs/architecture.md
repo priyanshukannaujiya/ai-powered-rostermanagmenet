@@ -67,3 +67,4 @@ erDiagram
     EMPLOYEES ||--o{ CONFLICTS : "involved in"
     USERS ||--o{ AUDIT_LOG : "recorded in"
 ```
+

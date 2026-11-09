@@ -141,3 +141,4 @@ export function expandDemandForMonth(
 
   return demands;
 }
+

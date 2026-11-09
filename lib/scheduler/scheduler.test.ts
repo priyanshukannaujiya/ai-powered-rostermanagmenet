@@ -518,3 +518,4 @@ describe("Scheduler Engine Pure Scenarios", () => {
     expect(replanResult.diff.changedDays.some((d) => d.date === "2026-11-20")).toBe(true);
   });
 });
+

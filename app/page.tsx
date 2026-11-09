@@ -15,3 +15,4 @@ export default async function RootPage() {
 
   redirect("/me");
 }
+

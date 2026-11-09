@@ -42,3 +42,4 @@ export const authConfig: NextAuthConfig = {
   },
   providers: [], // Configured with credentials in auth.ts
 };
+
