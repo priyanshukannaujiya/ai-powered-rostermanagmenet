@@ -52,15 +52,26 @@ The manager password must be at least 16 characters. The legacy `npm run db:seed
 
 CSV employee rows must include `initial_password` (minimum 12 characters). The employee email is the login name. Employees whose IDs are listed as pod leads receive the pod-lead role; all other imported employees receive the employee role. Passwords are bcrypt-hashed before storage. The downloadable templates contain headers only; the synthetic CSV under `fixtures/` is for testing and must not be used for production credentials. Do not email or commit production credential files; distribute initial passwords through a secure channel. To rotate imported account passwords, import the employee again with a new initial password.
 
+## 4. Adding and Managing Roster Data
+
+Managers have two ways to enter real operational data:
+
+1. **Import new data for a month** at `/manager/import`. Choose the target month before selecting a CSV or Excel file. The preview shows validation warnings and the selected month; a file's own month value does not silently select or replace the manager's choice. Importing updates included shared master records and stores operating rules, assignments, weekly offs, leave dates, and generated roster data for the selected month. Assignment and leave ranges are clipped to that month. Holidays outside the selected month are rejected. Records omitted from a file are preserved; imports do not deactivate or delete omitted employees, brands, or assignments. The import and roster generation run in one database transaction and roll back together on failure.
+2. **Add, edit, deactivate, or delete records** at `/manager/master`. Forms are specific to employees, pods and leads, brands, processes/tasks, brand-process coverage rules, assignments, weekly offs, and holidays. Foreign-key relationships and required values are validated. Referenced pods or processes cannot be deleted; employee, brand, rule, and assignment history is preserved by deactivation. Employee login setup is optional in the employee form and requires an initial password of at least 12 characters; an existing password is never returned to the browser.
+
+Employees, pods, brands, processes, and coverage rules are shared master data. A monthly roster has its own generated schedule and imported operating-rule overrides. Editing shared data does not silently rewrite an already generated roster; review the impact and explicitly regenerate the month. See `/manager/rosters` to browse stored months, status, shifts, and conflicts. The AI assistant reads the current database, including month-specific coverage rules for its selected month.
+
+An empty database remains empty until a manager imports or adds records. The manager account is independent of roster data and is not deleted by these workflows. The migration adds the import-month and per-month rule storage; apply `npm run db:migrate` to the intended database before using the updated application. Verify the target environment before running migrations; this change does not itself run migrations or modify production data.
+
 ---
 
-## 4. Environment Variables (`.env.example`)
+## 5. Environment Variables (`.env.example`)
 
 Create a `.env` file in the root directory:
 
 ```env
 # Neon Serverless Postgres connection string
-DATABASE_URL=
+DATABASE_URL=xyz
 
 # Auth.js secret for JWT encryption (generate a unique random value of at least 32 characters)
 AUTH_SECRET=generate_a_unique_secret_of_at_least_32_characters
@@ -76,7 +87,7 @@ BOOTSTRAP_MANAGER_PASSWORD=use_a_unique_random_password_of_at_least_16_character
 
 ---
 
-## 5. Local Setup & Migration Instructions
+## 6. Local Setup & Migration Instructions
 
 ### 1. Install Dependencies
 ```bash
@@ -109,7 +120,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-## 6. How I Think About This Problem
+## 7. How I Think About This Problem
 
 ### 1. How did you model employees, brands, processes, pods, and their relationships?
 I modeled the domain around an operational many-to-many relationship with clear ownership hierarchies:
@@ -173,15 +184,15 @@ Our philosophy is **explainability over silent failure**:
 
 ---
 
-## 7. Verification
+## 8. Verification
 
 Run `npm test` for scheduler and import tests, `npm run typecheck` for TypeScript validation, and `npm run build` for a production build. The files under `fixtures/` are synthetic test data; the application does not seed or display them as live roster records.
 
 ---
 
-## 8. Dynamic Roster Data Import
+## 9. Dynamic Roster Data Import
 
-The manager import page (`/manager/import`) supports the existing multi-sheet Excel workflow and a single-file CSV workflow.
+Managers have two distinct input options: import a roster file for a specifically selected month, or manage individual records on `/manager/master`. Both options use real database records; no demo records are generated.
 
 ### Single-CSV workflow
 
@@ -189,19 +200,32 @@ Download `smart_roster_template.csv` from the import page. Each row represents o
 
 The CSV includes:
 
-- `schedule_month` (`YYYY-MM`), which selects the month to regenerate.
+- `schedule_month` (`YYYY-MM`), retained as a workbook column; the required month selector on the import page is authoritative.
 - Pod, employee, and pod-lead details.
 - Employee weekly-off day, active status, and `initial_password` (at least 12 characters).
 - Employee email is used as the login. Pod lead IDs in the pod rows determine which imported users receive pod-lead access.
 - Brand and process names/codes, operating calendar, and weekday/Sunday/holiday headcount rules.
 - Assignment validity dates, priority, and exclusivity.
 
-CSV uploads are validated and previewed before commit. They **merge** by natural keys: matching records are updated, new records are added, and records omitted from the file are preserved. Weekly-off changes apply only to the selected month. CSV imports do not contain or modify leave requests; employees continue to submit leave through the employee portal. Existing holidays and approved leave requests remain available to roster generation. Initial passwords are bcrypt-hashed and never returned to the browser. Distribute credentials securely, and use unique real passwords instead of the test-only values in the sample fixture.
+CSV uploads are validated and previewed before commit. They merge matching shared records; records omitted from the file are preserved. Coverage rules, assignments, weekly offs, leave dates, and generated roster data are scoped to the selected month. Leave ranges are clipped to that month, and holiday rows outside it are rejected. CSV imports do not replace leave requests not present in the file; employees continue to submit leave through the employee portal. Initial passwords are bcrypt-hashed and never returned to the browser. Distribute credentials securely, and use unique real passwords instead of the test-only values in the sample fixture.
 
 The AI assistant queries the live database, so imported pods, employees, brands, schedules, and roster updates are available through its tools after commit. Its existing role-based access rules continue to apply.
 
 ### Excel workbook workflow
-The multi-sheet Excel template is blank and remains available for full workbook imports. Unlike CSV, workbook imports use replacement semantics and may deactivate employees omitted from the workbook. The workbook format has a Leaves sheet; keep leave information in the employee portal when using the single-CSV workflow.
+The multi-sheet Excel template is blank and remains available. Excel imports use the same selected-month workflow and merge/preserve behavior as CSV; omitted employees, brands, and assignments are not deleted or deactivated. The workbook format has a Leaves sheet. Workbook imports do not create employee logins because the workbook has no initial-password field; add an initial password through employee management or use the CSV workflow.
+
+### Dynamic master-data management
+The manager page offers field-specific forms to create, edit, and deactivate employee, pod/lead, brand, process/task, brand-process rule, assignment, weekly-off, and holiday records. Database relationships and required values are validated on the server. Referenced pods and processes are protected from deletion; history-bearing rows are deactivated instead of removed. Employee password hashes are never sent to the client.
+
+The shared master configuration is distinct from a roster month. Imported schedules are stored as per-month coverage overrides; regenerating one month reads its override and does not change other months' roster rows. The `/manager/rosters` page lists each stored month, roster status, shift count, and conflicts. The AI assistant uses live master data and the selected month's rule overrides.
+
+### AI assistant and portal notifications
+
+The assistant answers roster, conflict, availability, configuration, and leave questions from live database records and carries the current chat context through follow-up questions. It reports unresolved conflicts with their dates and suggested fixes, and availability checks exclude approved leave, effective weekly offs, and existing roster assignments when a roster exists. If availability cannot be verified because the selected month has no roster, the assistant must say so.
+
+Roster assignments made through the assistant do not implicitly approve a leave, mark conflicts resolved, or notify anyone. After a successful assignment, the assistant offers to notify the named employee; it sends only after a manager directly requests or confirms the notification. The employee receives the notice in `/me`, and their pod lead sees a corresponding update in the manager/pod-lead approvals portal. Employee leave submissions and manager/pod-lead approvals or rejections also create portal notifications. The assistant does not pick an unspecified leave request or guess between employees with matching names.
+
+Managers can ask for all leave history or filter by request status. Pod leads and employees see only records within their role scope. Notification reads and acknowledgements are restricted to the same employee/pod scope.
 
 ### 1. Workbook Structure & Template (8 Sheets)
 Download the official template directly from `GET /api/import/template` or the Import page:
@@ -233,22 +257,22 @@ Download the official template directly from `GET /api/import/template` or the I
 - **Warnings**: Identifies single-resource brands and processes where eligible headcount < required headcount.
 
 ### 3. Preview & Commit Workflow
-1. **Preview (`POST /api/import/preview`)**: Validates the upload, runs entity diffs against PostgreSQL, and writes **zero** records. CSV previews use merge semantics; workbook previews use replacement semantics.
+1. **Preview (`POST /api/import/preview`)**: Requires the explicitly selected month, validates the upload, runs entity diffs against PostgreSQL, and writes **zero** records. Both formats use merge/preserve semantics.
 2. **Commit (`POST /api/import/commit`)**:
-   - Re-validates and upserts records on the server.
-   - CSV imports merge records and preserve records omitted from the CSV; they do not import leaves.
-   - Workbook imports replace the imported employee/assignment set and can deactivate employees omitted from the workbook.
+   - Re-validates and upserts records on the server inside a database transaction.
+   - Both formats preserve records omitted from the upload and scope monthly records to the selected month.
+   - CSV imports provision employee accounts using bcrypt-hashed initial passwords; Excel imports do not create logins.
    - Records import metadata and row counts.
    - Automatically triggers the deterministic scheduler to solve and regenerate the roster for the affected month.
-   - Review the preview carefully, especially before committing a replacement-mode workbook.
+   - A failure rolls back the import and generated roster together.
 
 ---
 
-## 9. Assumptions Section
+## 10. Assumptions Section
 
-1. **Operating Month Scope**: CSV imports set the roster month with `schedule_month`; if omitted for a workbook import, the current month is used. Master data spans across months.
+1. **Operating Month Scope**: The manager must explicitly select a valid `YYYY-MM` month for every import. There is no implicit current-month fallback. Shared master data spans months; imported coverage rules and generated roster output are month-specific.
 2. **Natural Keys**: Entities are uniquely identified by natural codes (`employee_id`, `pod_code`, `brand_code`, `process_code`) rather than arbitrary names.
 3. **Weekly-Off Policy**: Every active employee has 1 designated weekly rest day per calendar week. In high-demand scenarios, the scheduler may adjust an employee's rest day to another day within the same week to satisfy mandatory coverage.
 4. **Consecutive Days Limit**: The scheduler enforces a hard limit of at most 6 consecutive working days without a rest day.
 5. **Deterministic Ties**: If multiple eligible employees have identical cost scores for a shift, ties are broken deterministically by `employee_id` sorting.
-6. **Import Idempotency**: Re-uploading an earlier workbook restores that exact master state and re-solves schedules without orphaned data.
+6. **Import Idempotency**: Re-uploading a file for the same selected month upserts matching records, replaces that month's included rule/assignment data, preserves omitted records, and regenerates only that month.

@@ -65,6 +65,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
   const navLinks = [
     { label: "Dashboard", href: "/manager", icon: LayoutDashboard },
     { label: "Roster Grid", href: `/manager/roster/${currentMonth}`, icon: Grid3X3 },
+    { label: "Monthly Rosters", href: "/manager/rosters", icon: Calendar },
     { label: "Dimensions View", href: "/manager/views", icon: Layers },
     { label: "Analytics", href: "/manager/analytics", icon: BarChart3 },
     { label: "Excel Import", href: "/manager/import", icon: FileSpreadsheet },

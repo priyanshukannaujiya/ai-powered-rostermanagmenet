@@ -5,6 +5,7 @@ import * as path from "path";
 import { generateTemplateCsv, generateTemplateWorkbook } from "./template";
 import { parseImportFileBuffer, parseRosterCsvBuffer, parseWorkbookBuffer } from "./parse";
 import { validateWorkbook, computeEntityDiff } from "./validate";
+import { intersectMonthRange, isValidRosterMonth } from "./month";
 
 const sampleWorkbookBuffer = () => {
   const wb = XLSX.utils.book_new();
@@ -67,6 +68,26 @@ const sampleWorkbookBuffer = () => {
 };
 
 describe("Excel Import System - Parse, Validate, and Diff", () => {
+  it("accepts only explicit YYYY-MM months with a real month number", () => {
+    expect(isValidRosterMonth("2026-11")).toBe(true);
+    expect(isValidRosterMonth("2026-00")).toBe(false);
+    expect(isValidRosterMonth("2026-13")).toBe(false);
+    expect(isValidRosterMonth("2026-1")).toBe(false);
+    expect(isValidRosterMonth("")).toBe(false);
+  });
+
+  it("clips imported date ranges to the selected month without crossing month boundaries", () => {
+    expect(intersectMonthRange("2026-10-25", "2026-11-03", "2026-11")).toEqual({
+      start: "2026-11-01",
+      end: "2026-11-03",
+    });
+    expect(intersectMonthRange("2026-11-05", null, "2026-11")).toEqual({
+      start: "2026-11-05",
+      end: "2026-11-30",
+    });
+    expect(intersectMonthRange("2026-10-01", "2026-10-31", "2026-11")).toBeNull();
+  });
+
   it("downloads blank workbook and CSV templates without example records", () => {
     const buffer = generateTemplateWorkbook();
     const parsed = parseWorkbookBuffer(buffer);
@@ -188,6 +209,8 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
       expect(validation.ok).toBe(true);
       expect(validation.errors).toHaveLength(0);
       expect(validation.warnings.some((warning) => warning.code === "SPOF_SINGLE_RESOURCE")).toBe(true);
+      expect(validateWorkbook(parsed.data, { requireInitialPasswords: true }).ok).toBe(false);
+      expect(validateWorkbook(parsed.data, { targetMonth: "2026-12" }).ok).toBe(false);
     }
   });
 

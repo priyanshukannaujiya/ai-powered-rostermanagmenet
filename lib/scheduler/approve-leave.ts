@@ -13,6 +13,7 @@ import {
   ConflictItem,
 } from "./types";
 import { formatDateOnly } from "@/lib/date-utils";
+import { createEmployeeNotification } from "@/lib/notifications/create";
 
 export interface ApproveLeaveParams {
   leaveId: string;
@@ -29,6 +30,7 @@ export interface ApproveLeaveResult {
   leave?: any;
   diff?: any;
   metrics?: any;
+  notificationWarning?: string;
   error?: string;
   status?: number;
 }
@@ -61,6 +63,13 @@ export async function approveLeaveAndReplan({
   }
 
   const leave = leaveRows[0];
+  if (leave.status !== "pending") {
+    return {
+      success: false,
+      error: `This leave request is already ${leave.status}.`,
+      status: 409,
+    };
+  }
   const startDate = formatDateOnly(leave.start_date);
   const endDate = formatDateOnly(leave.end_date);
   const month = startDate.slice(0, 7); // e.g. '2026-11'
@@ -88,18 +97,34 @@ export async function approveLeaveAndReplan({
   const monthRows = await sql`SELECT * FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
   if (monthRows.length === 0) {
     // If roster not yet generated, simply approve
+    let notificationWarning: string | undefined;
     if (!previewOnly) {
       await sql`
         UPDATE leaves
         SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = now(), updated_at = now()
         WHERE id = ${leaveId};
       `;
+      try {
+        await createEmployeeNotification(sql, {
+          employeeId: leave.employee_id,
+          title: "Leave request approved",
+          message: `Your leave request for ${startDate} to ${endDate} has been approved. No roster had been generated for ${month}.`,
+          type: "leave_approved",
+          date: startDate,
+          metadata: { leaveId, status: "approved" },
+          notifyPodLead: true,
+        });
+      } catch (notificationError) {
+        console.error("Leave approved but notification delivery failed:", notificationError);
+        notificationWarning = "The leave was approved, but its notification could not be delivered.";
+      }
     }
     return {
       success: true,
       message: `Leave approved for ${leave.employee_name}. No active roster month (${month}) found to replan.`,
       preview: previewOnly,
       leave,
+      notificationWarning,
     };
   }
 
@@ -289,11 +314,28 @@ export async function approveLeaveAndReplan({
     );
   `;
 
+  let notificationWarning: string | undefined;
+  try {
+    await createEmployeeNotification(sql, {
+      employeeId: leave.employee_id,
+      title: "Leave request approved",
+      message: `Your leave request for ${startDate} to ${endDate} has been approved.`,
+      type: "leave_approved",
+      date: startDate,
+      metadata: { leaveId, status: "approved" },
+      notifyPodLead: true,
+    });
+  } catch (notificationError) {
+    console.error("Leave approved but notification delivery failed:", notificationError);
+    notificationWarning = "The leave was approved, but its notification could not be delivered.";
+  }
+
   return {
     success: true,
     message: `Leave for ${leave.employee_name} (${startDate} to ${endDate}) approved and future roster days replanned successfully.`,
     leave,
     diff: replanResult.diff,
     metrics: replanResult.metrics,
+    notificationWarning,
   };
 }

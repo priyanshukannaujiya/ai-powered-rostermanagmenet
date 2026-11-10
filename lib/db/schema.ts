@@ -45,6 +45,7 @@ export const imports = pgTable(
     uploadedBy: text("uploaded_by"),
     uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
     status: importStatusEnum("status").default("previewed").notNull(),
+    targetMonth: text("target_month"),
     rowCounts: jsonb("row_counts"),
     errorSummary: jsonb("error_summary"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -286,6 +287,27 @@ export const rosterMonths = pgTable(
   (table) => [uniqueIndex("roster_months_month_idx").on(table.month)]
 );
 
+export const rosterMonthRules = pgTable(
+  "roster_month_rules",
+  {
+    id: text("id").primaryKey(),
+    month: text("month").notNull(),
+    brandProcessId: text("brand_process_id")
+      .notNull()
+      .references(() => brandProcesses.id, { onDelete: "cascade" }),
+    operatingCalendar: operatingCalendarEnum("operating_calendar").notNull(),
+    minHeadcountWeekday: integer("min_headcount_weekday").notNull(),
+    minHeadcountSunday: integer("min_headcount_sunday").notNull(),
+    minHeadcountHoliday: integer("min_headcount_holiday").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("roster_month_rules_month_bp_unique").on(table.month, table.brandProcessId),
+    index("roster_month_rules_month_idx").on(table.month),
+  ]
+);
+
 // 13. Roster Days
 export const rosterDays = pgTable(
   "roster_days",
@@ -440,4 +462,3 @@ export const rosterMonthsRelations = relations(rosterMonths, ({ many }) => ({
   days: many(rosterDays),
   conflicts: many(conflicts),
 }));
-

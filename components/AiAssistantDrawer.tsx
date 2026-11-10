@@ -151,17 +151,17 @@ export function AiAssistantDrawer({
   >([
     {
       role: "assistant",
-      text: `### 🤖 Operations Intelligence Active (${currentMonth})
+      text: `### Operations assistant ready (${currentMonth})
 
-I am your active Operations Intelligence Copilot with live access to the scheduler constraint graph.
+I use live roster, employee, pod, brand, process, leave, and conflict records. I will ask when a date, person, or assignment is ambiguous, and I will not send employee notifications without your explicit confirmation.
 
 I analyze:
-• **Full System Health** — Overall coverage score, shift volumes, and blocking violations
-• **Pod Workload & Equity** — Capacity distribution, overwork alerts (>24 shifts), rest day compliance
-• **Single-Resource (SPOF) Risks** — Vulnerability analysis on single-staffed D2C brands
-• **Leave Queue & Replanning** — Predictive impact simulations on pending employee requests
+• **Roster and coverage** — Unresolved conflicts, clashes, and coverage gaps
+• **Availability** — Qualified employees, approved leave, weekly offs, and existing shifts
+• **Leave requests** — Pending, approved, and rejected requests in your authorized scope
+• **Manager actions** — Assignments, leave decisions, and opt-in employee/pod notifications
 
-Click any quick-audit chip below or ask any operational query!`,
+Ask a question in plain language or choose a query below.`,
       time: "Live",
     },
   ]);
@@ -206,7 +206,11 @@ Click any quick-audit chip below or ask any operational query!`,
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: q, month: currentMonth }),
+        body: JSON.stringify({
+          message: q,
+          month: currentMonth,
+          history: messages.slice(-10).map(({ role, text }) => ({ role, content: text })),
+        }),
       });
 
       const data = await res.json();
@@ -221,6 +225,7 @@ Click any quick-audit chip below or ask any operational query!`,
       if (
         data?.toolUsed === "approve_leave" ||
         data?.toolUsed === "assign_replacement_employee" ||
+        data?.toolUsed === "notify_employee" ||
         data?.data?.systemReflected ||
         data?.data?.approved
       ) {
@@ -258,17 +263,17 @@ Click any quick-audit chip below or ask any operational query!`,
     ]);
   };
 
-  // Categorized Quick Action Chips for Managers and Pod Leads
+  // Query-oriented prompts avoid hard-coded demo employees or client data.
   const promptChips = [
-    { label: "Is there any leave application?", icon: FileCheck2, prompt: "Is there any leave application in the queue?" },
-    { label: "If I approve Priya's leave, any conflict?", icon: AlertTriangle, prompt: "If I approve Priya's leave is there any conflict for the client?" },
-    { label: "Who is available on Nov 20?", icon: Sparkles, prompt: "Is there any other employee available on that day to cover Brewhaus CS?" },
-    { label: "Assign Aarav to Brewhaus CS", icon: Check, prompt: "Assign Aarav Sharma to cover Brewhaus CS on Nov 20 and 21" },
-    { label: "Approve Pending Leave", icon: FileCheck2, prompt: "Approve pending leave request and replan future shifts" },
+    { label: "Show leave requests", icon: FileCheck2, prompt: "Show all leave requests and their statuses for my authorized scope." },
+    { label: "List roster conflicts", icon: AlertTriangle, prompt: `List every unresolved conflict for ${currentMonth}, with dates and suggested fixes.` },
+    { label: "Check employee availability", icon: Sparkles, prompt: "Who is qualified and available for a configured brand/process on a date? Ask me for any missing details." },
+    { label: "Check leave impact", icon: FileCheck2, prompt: "Show pending leave requests and check the coverage impact for a specific request before taking action." },
     { label: "Weekly-Off Equity & Fairness", icon: Users2, prompt: "Analyze employee preferences and fair weekly-off distribution across pods" },
-    { label: "System Health Audit", icon: BarChart3, prompt: "Give me a full system health audit for November 2026" },
+    { label: "System Health Audit", icon: BarChart3, prompt: `Give me a full system health audit for ${currentMonth}` },
     { label: "Pod Workload & Capacity", icon: Users2, prompt: "Analyze pod workload, shift equity, and capacity distribution" },
     { label: "SPOF Risk Analysis", icon: AlertTriangle, prompt: "Which single-resource brands are at risk if staff take leave?" },
+    { label: "Notification controls", icon: Check, prompt: "After an assignment, ask before notifying the employee or pod lead." },
   ];
 
   if (!isOpen) return null;

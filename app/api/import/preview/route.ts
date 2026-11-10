@@ -6,6 +6,8 @@ import { parseImportFileBuffer } from "@/lib/import/parse";
 import { validateWorkbook, computeEntityDiff } from "@/lib/import/validate";
 import { ImportDiff } from "@/lib/import/types";
 import { formatDateOnly } from "@/lib/date-utils";
+import { isValidRosterMonth } from "@/lib/import/month";
+import { intersectMonthRange } from "@/lib/import/month";
 
 export const dynamic = "force-dynamic";
 
@@ -16,10 +18,17 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const targetMonth = String(formData.get("targetMonth") || "");
 
     if (!file) {
       return NextResponse.json(
         { ok: false, errors: [{ sheet: "File", row: 0, field: "file", message: "No CSV or Excel file uploaded" }] },
+        { status: 400 }
+      );
+    }
+    if (!isValidRosterMonth(targetMonth)) {
+      return NextResponse.json(
+        { ok: false, errors: [{ sheet: "Import", row: 0, field: "targetMonth", message: "Select a valid roster month before previewing." }] },
         { status: 400 }
       );
     }
@@ -44,13 +53,25 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Validate rows, referential integrity, and business rules
-    const validation = validateWorkbook(parseResult.data);
+    const data = { ...parseResult.data, target_month: targetMonth };
+    const fileTargetMonth = parseResult.data.target_month || null;
+    const validation = validateWorkbook(data, { requireInitialPasswords: isCsvImport, targetMonth });
     if (!validation.ok) {
       return NextResponse.json(
         {
           ok: false,
           errors: validation.errors,
-          warnings: validation.warnings,
+          warnings: [
+            ...validation.warnings,
+            ...(!isCsvImport ? [{
+              code: "ACCOUNTS_NOT_PROVISIONED",
+              message: "This workbook does not contain initial passwords. Employee and pod-lead login accounts will not be created by this import.",
+            }] : []),
+            ...(fileTargetMonth && fileTargetMonth !== targetMonth ? [{
+              code: "SELECTED_MONTH_OVERRIDES_FILE",
+              message: `The file specifies ${fileTargetMonth}; this import will use the explicitly selected month ${targetMonth}.`,
+            }] : []),
+          ],
           rowCounts: validation.rowCounts,
         },
         { status: 422 }
@@ -59,6 +80,9 @@ export async function POST(req: NextRequest) {
 
     // 3. Compute Diff against current database without writing
     const sql = neon(process.env.DATABASE_URL!);
+    const [year, monthNumber] = targetMonth.split("-").map(Number);
+    const monthStart = `${targetMonth}-01`;
+    const monthEnd = `${targetMonth}-${String(new Date(Date.UTC(year, monthNumber, 0)).getUTCDate()).padStart(2, "0")}`;
 
     const [
       existingPods,
@@ -76,25 +100,42 @@ export async function POST(req: NextRequest) {
       sql`SELECT id, name, code FROM processes;`,
       sql`
         SELECT bp.id, b.code as brand_code, p.code as process_code, bp.operating_calendar, 
-               bp.min_headcount_weekday, bp.min_headcount_sunday, bp.min_headcount_holiday
+               COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
+               COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as month_min_headcount_weekday,
+               COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as month_min_headcount_sunday,
+               COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as month_min_headcount_holiday
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
-        JOIN processes p ON bp.process_id = p.id;
+        JOIN processes p ON bp.process_id = p.id
+        LEFT JOIN roster_month_rules mr
+          ON mr.brand_process_id = bp.id AND mr.month = ${targetMonth};
       `,
       sql`
-        SELECT a.id, e.id as employee_id, b.code as brand_code, p.code as process_code,
-               a.start_date, a.end_date, a.priority, a.is_exclusive
+        SELECT DISTINCT ON (e.id, b.code, p.code)
+               a.id, e.id as employee_id, b.code as brand_code, p.code as process_code,
+               GREATEST(a.start_date, ${monthStart}::date) as start_date,
+               LEAST(COALESCE(a.end_date, ${monthEnd}::date), ${monthEnd}::date) as end_date,
+               a.priority, a.is_exclusive
         FROM assignments a
         JOIN employees e ON a.employee_id = e.id
         JOIN brand_processes bp ON a.brand_process_id = bp.id
         JOIN brands b ON bp.brand_id = b.id
         JOIN processes p ON bp.process_id = p.id;
+        WHERE a.active = true
+          AND a.start_date <= ${monthEnd}
+          AND (a.end_date IS NULL OR a.end_date >= ${monthStart})
+        ORDER BY e.id, b.code, p.code, a.start_date DESC;
       `,
-      sql`SELECT id, employee_id, start_date, end_date, type, status FROM leaves;`,
-      sql`SELECT id, date, name FROM holidays;`,
+      sql`
+        SELECT id, employee_id,
+          GREATEST(start_date, ${monthStart}::date) as start_date,
+          LEAST(end_date, ${monthEnd}::date) as end_date,
+          type, status
+        FROM leaves
+        WHERE start_date <= ${monthEnd} AND end_date >= ${monthStart};
+      `,
+      sql`SELECT id, date, name FROM holidays WHERE date >= ${monthStart} AND date <= ${monthEnd};`,
     ]);
-
-    const data = parseResult.data;
 
     // Diff pods (natural key: pod_code)
     const podsDiff = computeEntityDiff(
@@ -142,28 +183,35 @@ export async function POST(req: NextRequest) {
       existingBp,
       (s) => `${s.brand_code}:${s.process_code}`,
       (newItem, existing) =>
-        newItem.operating_calendar === existing.operating_calendar &&
-        newItem.weekday_headcount === existing.min_headcount_weekday &&
-        newItem.sunday_headcount === existing.min_headcount_sunday &&
-        newItem.holiday_headcount === existing.min_headcount_holiday
+        newItem.operating_calendar === existing.month_operating_calendar &&
+        newItem.weekday_headcount === existing.month_min_headcount_weekday &&
+        newItem.sunday_headcount === existing.month_min_headcount_sunday &&
+        newItem.holiday_headcount === existing.month_min_headcount_holiday
     );
 
-    // Diff assignments (natural key: employee_id + brand_code + process_code + valid_from)
+    const monthAssignments = data.assignments.flatMap((assignment) => {
+      const range = intersectMonthRange(assignment.valid_from, assignment.valid_to, targetMonth);
+      return range ? [{ ...assignment, valid_from: range.start, valid_to: range.end }] : [];
+    });
     const assignmentsDiff = computeEntityDiff(
-      data.assignments,
+      monthAssignments,
       existingAssignments,
-      (a) => `${a.employee_id}:${a.brand_code}:${a.process_code}:${formatDateOnly(a.valid_from || a.start_date)}`,
+      (a) => `${a.employee_id}:${a.brand_code}:${a.process_code}:${targetMonth}`,
       (newItem, existing) =>
+        newItem.valid_from === formatDateOnly(existing.start_date) &&
+        newItem.valid_to === formatDateOnly(existing.end_date) &&
         newItem.priority === existing.priority &&
-        newItem.is_exclusive === existing.is_exclusive &&
-        (newItem.valid_to || null) === (existing.end_date ? formatDateOnly(existing.end_date) : null)
+        newItem.is_exclusive === existing.is_exclusive
     );
 
-    // Diff leaves
+    const monthLeaves = data.leaves.flatMap((leave) => {
+      const range = intersectMonthRange(leave.date_from, leave.date_to, targetMonth);
+      return range ? [{ ...leave, date_from: range.start, date_to: range.end }] : [];
+    });
     const leavesDiff = computeEntityDiff(
-      data.leaves,
+      monthLeaves,
       existingLeaves,
-      (l) => `${l.employee_id}:${formatDateOnly(l.date_from || l.start_date)}:${formatDateOnly(l.date_to || l.end_date)}`,
+      (l) => `${l.employee_id}:${l.date_from}:${l.date_to}`,
       (newItem, existing) =>
         newItem.type === existing.type && newItem.status === existing.status
     );
@@ -186,16 +234,14 @@ export async function POST(req: NextRequest) {
       leaves: leavesDiff,
       holidays: holidaysDiff,
     };
-    if (isCsvImport) {
-      for (const entityDiff of Object.values(diff)) entityDiff.removed = 0;
-    }
+    for (const entityDiff of Object.values(diff)) entityDiff.removed = 0;
 
     return NextResponse.json({
       ok: true,
       filename: file.name,
       fileSize: file.size,
-      targetMonth: data.target_month || null,
-      importMode: isCsvImport ? "merge" : "replace",
+      targetMonth,
+      importMode: "merge",
       rowCounts: validation.rowCounts,
       errors: [],
       warnings: validation.warnings,

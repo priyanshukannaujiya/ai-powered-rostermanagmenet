@@ -5,6 +5,13 @@ import "@/lib/db/dns-patch";
 import { findBackupCandidates } from "@/lib/scheduler/capacity";
 import { approveLeaveAndReplan } from "@/lib/scheduler/approve-leave";
 import {
+  isExplicitLeaveApprovalRequest,
+  isExplicitNotificationRequest,
+} from "@/lib/assistant/intent";
+import { randomUUID } from "crypto";
+import { isValidRosterMonth } from "@/lib/import/month";
+import { createEmployeeNotification } from "@/lib/notifications/create";
+import {
   EmployeeInfo,
   BrandProcessRule,
   AssignmentRule,
@@ -34,6 +41,12 @@ function checkRateLimit(userId: string): boolean {
 
   userRate.count++;
   return true;
+}
+
+function isValidDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 // Live OpenAI-compatible Function Tools Definition
@@ -81,7 +94,7 @@ const toolsDefinition = [
     type: "function",
     function: {
       name: "get_pending_leaves",
-      description: "Fetch pending leave requests currently in the queue awaiting manager or pod lead review.",
+      description: "Fetch pending leave requests from live records, including employee, pod, dates, reason, and status. Results are restricted to the caller's authorized scope.",
       parameters: {
         type: "object",
         properties: {
@@ -93,8 +106,24 @@ const toolsDefinition = [
   {
     type: "function",
     function: {
+      name: "get_leave_requests",
+      description: "List leave requests and their statuses from live records. Managers and pod leads can inspect their authorized scope; employees can inspect only their own requests. Use all_history=true to include all dates.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: ["string", "null"], enum: ["pending", "approved", "rejected", "all"] },
+          employee_name: { type: ["string", "null"], description: "Optional employee name filter for managers and pod leads" },
+          all_history: { type: ["boolean", "null"], description: "Include requests from all dates instead of the selected roster month" },
+          month: { type: ["string", "null"], description: "Optional month in YYYY-MM format" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "approve_leave",
-      description: "Approve a leave request directly in PostgreSQL and execute automated incremental roster replanning. Can target by employee name or leave ID.",
+      description: "Approve a specific pending leave only when the caller clearly instructs you to approve it. This commits the leave decision and replans the roster; do not use for hypothetical questions.",
       parameters: {
         type: "object",
         properties: {
@@ -109,7 +138,7 @@ const toolsDefinition = [
     type: "function",
     function: {
       name: "find_backups",
-      description: "Discover certified cross-trained backup employees available to cover a brand process on a given date.",
+      description: "Find qualified active employees who are actually available for a brand/process on a date, excluding approved leave, effective weekly offs, and existing working roster assignments.",
       parameters: {
         type: "object",
         properties: {
@@ -138,11 +167,14 @@ const toolsDefinition = [
     type: "function",
     function: {
       name: "get_conflicts",
-      description: "Retrieve all active scheduling conflicts (blocking violations vs. soft warnings) with suggested manager fixes.",
+      description: "Retrieve live scheduling conflicts (blocking violations and warnings) with dates, affected employees, details, and suggested fixes. Supports optional date, brand/process, and severity filters.",
       parameters: {
         type: "object",
         properties: {
           month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
+          date: { type: ["string", "null"], description: "Optional exact date in YYYY-MM-DD format" },
+          brand_or_process: { type: ["string", "null"], description: "Optional brand name or process code filter" },
+          severity: { type: ["string", "null"], enum: ["blocking", "warning"] },
         },
       },
     },
@@ -166,7 +198,7 @@ const toolsDefinition = [
     type: "function",
     function: {
       name: "assign_replacement_employee",
-      description: "Appoint a replacement backup employee to cover a brand process shift on specific dates, resolve client conflicts, approve the original employee's leave, and dispatch an official appointment notification to the employee portal.",
+      description: "Appoint a qualified, available employee to cover a specific brand/process and date(s). This changes the roster but does not approve leave or send notifications unless the manager explicitly requests those separate actions. After a successful assignment, ask whether the manager wants the employee notified.",
       parameters: {
         type: "object",
         properties: {
@@ -174,9 +206,26 @@ const toolsDefinition = [
           date_or_range: { type: "string", description: "Target date or date range in YYYY-MM-DD format" },
           brand_or_process: { type: ["string", "null"], description: "Configured brand name or process" },
           original_employee_name: { type: ["string", "null"], description: "Optional name of the employee being replaced" },
-          approve_leave: { type: ["boolean", "null"], description: "Whether to approve original employee pending leave (default: true)" },
         },
-        required: ["replacement_employee_name", "date_or_range"],
+        required: ["replacement_employee_name", "date_or_range", "brand_or_process"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "notify_employee",
+      description: "Send an explicit manager-approved notification to one exact employee and their pod lead. Use only after the manager directly asks you to notify/message/alert them, or confirms a prior offer. Never send just because a roster assignment was made.",
+      parameters: {
+        type: "object",
+        properties: {
+          employee_name: { type: "string", description: "Exact employee name to notify" },
+          employee_id: { type: ["string", "null"], description: "Employee ID to disambiguate duplicate names" },
+          title: { type: "string", description: "Short notification title" },
+          message: { type: "string", description: "Notification message; do not include passwords or secrets" },
+          date: { type: ["string", "null"], description: "Optional relevant date in YYYY-MM-DD format" },
+        },
+        required: ["employee_name", "title", "message"],
       },
     },
   },
@@ -255,8 +304,36 @@ async function executeTool(
   args: any,
   userRole: string,
   callerEmployeeId?: string | null,
-  userId?: string
+  userId?: string,
+  currentMessage = "",
+  previousAssistantMessage = ""
 ) {
+  const employeeScopedTools = new Set([
+    "get_employee_schedule",
+    "get_leave_requests",
+    "get_roster_configuration",
+  ]);
+  const managerOnlyTools = new Set([
+    "get_system_health",
+    "get_system_analysis",
+    "get_pod_workload",
+    "get_pod_analysis",
+    "get_spof_risks",
+    "find_backups",
+    "get_import_summary",
+    "get_import_errors",
+    "get_latest_import",
+    "list_brands",
+    "list_processes",
+    "get_pod_members",
+  ]);
+  if (userRole === "employee" && !employeeScopedTools.has(toolName)) {
+    return { error: "This operation is not available for employee accounts.", denied: true };
+  }
+  if (userRole === "pod_lead" && managerOnlyTools.has(toolName)) {
+    return { error: "This operation is restricted to managers.", denied: true };
+  }
+
   const sql = neon(process.env.DATABASE_URL!);
   const month = args.month || new Date().toISOString().slice(0, 7);
   const monthId = `roster-${month}`;
@@ -293,18 +370,25 @@ async function executeTool(
         LEFT JOIN brands b ON bp.brand_id = b.id
         LEFT JOIN processes p ON bp.process_id = p.id
         LEFT JOIN employees e ON c.employee_id = e.id
-        WHERE c.roster_month_id = ${monthId}
+        WHERE c.roster_month_id = ${monthId} AND c.resolved = false
         ORDER BY c.severity DESC, c.date ASC;
       `;
 
-      const employees = await sql`SELECT e.*, p.name as pod_name FROM employees e LEFT JOIN pods p ON e.pod_id = p.id;`;
+      const employees = await sql`SELECT e.*, p.name as pod_name FROM employees e LEFT JOIN pods p ON e.pod_id = p.id WHERE e.active = true;`;
       const pods = await sql`SELECT * FROM pods;`;
-      const brands = await sql`SELECT * FROM brands;`;
+      const brands = await sql`SELECT * FROM brands WHERE active = true;`;
       const brandProcesses = await sql`
-        SELECT bp.*, b.name as brand_name, p.code as process_code
+        SELECT bp.id, bp.brand_id, bp.process_id,
+          COALESCE(mr.operating_calendar, bp.operating_calendar) AS operating_calendar,
+          COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) AS min_headcount_weekday,
+          COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) AS min_headcount_sunday,
+          COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) AS min_headcount_holiday,
+          b.name as brand_name, p.code as process_code
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
-        JOIN processes p ON bp.process_id = p.id;
+        JOIN processes p ON bp.process_id = p.id
+        LEFT JOIN roster_month_rules mr ON mr.brand_process_id = bp.id AND mr.month = ${month}
+        WHERE bp.active = true AND b.active = true;
       `;
       const pendingLeaves = await sql`
         SELECT l.*, e.name as employee_name, p.name as pod_name
@@ -313,6 +397,14 @@ async function executeTool(
         LEFT JOIN pods p ON e.pod_id = p.id
         WHERE l.status = 'pending';
       `;
+      const [year, monthNumber] = month.split("-").map(Number);
+      const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+      const monthStart = `${month}-01`;
+      const monthEnd = `${month}-${String(daysInMonth).padStart(2, "0")}`;
+      const holidayRows = await sql`
+        SELECT date FROM holidays WHERE date >= ${monthStart} AND date <= ${monthEnd};
+      `;
+      const holidayDates = new Set(holidayRows.map((holiday: any) => formatDateOnly(holiday.date)));
 
       const workingDays = days.filter((d: any) => d.status === "working");
       const weeklyOffs = days.filter((d: any) => d.status === "weekly_off");
@@ -322,9 +414,33 @@ async function executeTool(
       const blockingConflicts = conflicts.filter((c: any) => c.severity === "blocking");
       const warnings = conflicts.filter((c: any) => c.severity === "warning");
 
-      const expectedWorkingSlots = employees.length * 22;
-      const coveragePercentage = expectedWorkingSlots > 0
-        ? Math.min(100, Math.round((workingDays.length / expectedWorkingSlots) * 100))
+      let expectedCoverageSlots = 0;
+      let coveredSlots = 0;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const date = `${month}-${String(day).padStart(2, "0")}`;
+        const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+        const isSunday = weekday === 0;
+        const isHoliday = holidayDates.has(date);
+        for (const rule of brandProcesses) {
+          const required = isHoliday
+            ? rule.min_headcount_holiday
+            : isSunday
+              ? rule.min_headcount_sunday
+              : rule.min_headcount_weekday;
+          const requiresCoverage =
+            rule.operating_calendar === "all_365" ||
+            (!isHoliday && rule.operating_calendar === "daily_no_holidays") ||
+            (!isHoliday && !isSunday && rule.operating_calendar === "mon_sat_no_holidays");
+          if (!requiresCoverage || required <= 0) continue;
+          expectedCoverageSlots += required;
+          const actual = workingDays.filter((shift: any) =>
+            shift.brand_process_id === rule.id && formatDateOnly(shift.date) === date
+          ).length;
+          coveredSlots += Math.min(actual, required);
+        }
+      }
+      const coveragePercentage = expectedCoverageSlots
+        ? Math.round((coveredSlots / expectedCoverageSlots) * 100)
         : 0;
 
       return {
@@ -332,6 +448,8 @@ async function executeTool(
         status: monthRecord[0]?.status || "draft",
         generatedAt: monthRecord[0]?.generated_at || null,
         coveragePercentage,
+        expectedCoverageSlots,
+        coveredCoverageSlots: coveredSlots,
         totals: {
           employees: employees.length,
           pods: pods.length,
@@ -536,14 +654,21 @@ async function executeTool(
     // 4. Pending Leave Approvals Queue
     case "get_pending_leaves":
     case "get_leave_queue_analysis": {
-      const pendingLeaves = await sql`
-        SELECT l.*, e.name as employee_name, e.email as employee_email, p.name as pod_name
+      let pendingLeaves = await sql`
+        SELECT l.*, e.name as employee_name, e.email as employee_email, e.pod_id, p.name as pod_name
         FROM leaves l
         JOIN employees e ON l.employee_id = e.id
         LEFT JOIN pods p ON e.pod_id = p.id
         WHERE l.status = 'pending'
         ORDER BY l.start_date ASC;
       `;
+      if (userRole === "employee") {
+        pendingLeaves = pendingLeaves.filter((leave: any) => leave.employee_id === callerEmployeeId);
+      } else if (userRole === "pod_lead") {
+        const podRows = await sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`;
+        const podIds = new Set(podRows.map((pod: any) => pod.id));
+        pendingLeaves = pendingLeaves.filter((leave: any) => podIds.has(leave.pod_id) || leave.employee_id === callerEmployeeId);
+      }
 
       const empIds = pendingLeaves.map((l: any) => l.employee_id);
       const assignedBrandsByEmp = new Map<string, string[]>();
@@ -570,7 +695,7 @@ async function executeTool(
         LEFT JOIN brand_processes bp ON c.brand_process_id = bp.id
         LEFT JOIN brands b ON bp.brand_id = b.id
         LEFT JOIN processes p ON bp.process_id = p.id
-        WHERE c.roster_month_id = ${monthId};
+        WHERE c.roster_month_id = ${monthId} AND c.resolved = false;
       `;
 
       return {
@@ -591,11 +716,71 @@ async function executeTool(
       };
     }
 
+    case "get_leave_requests": {
+      let leaveRows = await sql`
+        SELECT l.id, l.employee_id, l.start_date, l.end_date, l.type, l.reason, l.status,
+          l.created_at, l.reviewed_at, e.name as employee_name, e.pod_id, p.name as pod_name
+        FROM leaves l
+        JOIN employees e ON l.employee_id = e.id
+        LEFT JOIN pods p ON e.pod_id = p.id
+        ORDER BY l.start_date DESC;
+      `;
+      if (userRole === "employee") {
+        leaveRows = leaveRows.filter((leave: any) => leave.employee_id === callerEmployeeId);
+      } else if (userRole === "pod_lead") {
+        const podRows = await sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`;
+        const podIds = new Set(podRows.map((pod: any) => pod.id));
+        leaveRows = leaveRows.filter((leave: any) => podIds.has(leave.pod_id) || leave.employee_id === callerEmployeeId);
+      }
+
+      const requestedStatus = args.status || "all";
+      if (["pending", "approved", "rejected"].includes(requestedStatus)) {
+        leaveRows = leaveRows.filter((leave: any) => leave.status === requestedStatus);
+      }
+      if (args.employee_name && userRole !== "employee") {
+        const employeeQuery = String(args.employee_name).trim().toLowerCase();
+        leaveRows = leaveRows.filter((leave: any) => leave.employee_name.toLowerCase().includes(employeeQuery));
+      }
+      if (args.all_history !== true) {
+        const selectedMonth = args.month || month;
+        if (!isValidRosterMonth(selectedMonth)) {
+          return { error: "Select a valid YYYY-MM month or set all_history=true." };
+        }
+        const [year, monthNumber] = selectedMonth.split("-").map(Number);
+        const monthStart = `${selectedMonth}-01`;
+        const monthEnd = `${selectedMonth}-${String(new Date(Date.UTC(year, monthNumber, 0)).getUTCDate()).padStart(2, "0")}`;
+        leaveRows = leaveRows.filter((leave: any) =>
+          formatDateOnly(leave.start_date) <= monthEnd && formatDateOnly(leave.end_date) >= monthStart
+        );
+      }
+
+      return {
+        month: args.all_history === true ? "all history" : args.month || month,
+        status: requestedStatus,
+        count: leaveRows.length,
+        requests: leaveRows.map((leave: any) => ({
+          id: leave.id,
+          employee: leave.employee_name,
+          pod: leave.pod_name,
+          startDate: formatDateOnly(leave.start_date),
+          endDate: formatDateOnly(leave.end_date),
+          type: leave.type,
+          status: leave.status,
+          reason: leave.reason || "No reason provided",
+          requestedAt: leave.created_at,
+          reviewedAt: leave.reviewed_at,
+        })),
+      };
+    }
+
     // 5. Cross-Trained Backup Staff Search
     case "find_backups": {
+      if (userRole !== "manager") {
+        return { error: "Only managers can inspect cross-pod employee availability.", denied: true };
+      }
       const targetQuery = args.brand_or_process || args.brand_process_id;
       const date = args.date;
-      if (!targetQuery || !date) {
+      if (!targetQuery || !date || !isValidDate(date)) {
         return { error: "Specify a brand or process and a date to find qualified backups." };
       }
 
@@ -603,21 +788,27 @@ async function executeTool(
         SELECT bp.*, b.name as brand_name, p.code as process_code
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
-        JOIN processes p ON bp.process_id = p.id;
+        JOIN processes p ON bp.process_id = p.id
+        WHERE bp.active = true AND b.active = true;
       `;
 
       const qLower = targetQuery.toLowerCase();
       const words = qLower.split(/\s+/).filter(Boolean);
-      const targetBp =
-        allBpRaw.find((b: any) => {
-          const combined = `${b.brand_name} ${b.process_code} ${b.id}`.toLowerCase();
-          return words.every((w: string) => combined.includes(w));
-        }) ||
-        allBpRaw.find((b: any) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(words[0])) ||
-        allBpRaw.find((b: any) => b.process_code.toLowerCase() === words[words.length - 1]);
-      if (!targetBp) {
+      const targetMatches = allBpRaw.filter((b: any) => {
+        const combined = `${b.brand_name} ${b.process_code} ${b.id}`.toLowerCase();
+        return words.every((word: string) => combined.includes(word));
+      });
+      if (targetMatches.length === 0) {
         return { error: `No configured brand or process matches "${targetQuery}".` };
       }
+      if (targetMatches.length > 1) {
+        return {
+          needsClarification: true,
+          message: "More than one brand/process matches. Specify both the brand and process.",
+          matches: targetMatches.map((item: any) => ({ brand: item.brand_name, process: item.process_code })),
+        };
+      }
+      const targetBp = targetMatches[0];
 
       const certifiedStaff = await sql`
         SELECT DISTINCT e.id, e.name as employee_name, e.email, p.name as pod_name,
@@ -631,18 +822,34 @@ async function executeTool(
         LEFT JOIN pods p ON e.pod_id = p.id
         JOIN brand_processes bp ON a.brand_process_id = bp.id
         WHERE (bp.process_id = ${targetBp.process_id} OR bp.brand_id = ${targetBp.brand_id})
-          AND e.active = true;
+          AND a.active = true AND bp.active = true AND e.active = true
+          AND a.start_date <= ${date} AND (a.end_date IS NULL OR a.end_date >= ${date});
       `;
 
-      const leavesOnDate = await sql`
-        SELECT employee_id FROM leaves 
-        WHERE status = 'approved' AND start_date <= ${date} AND end_date >= ${date};
-      `;
-      const leaveEmpIds = new Set(leavesOnDate.map((l: any) => l.employee_id));
-
-      const availableCandidates = certifiedStaff
-        .filter((c: any) => !leaveEmpIds.has(c.id))
-        .map((c: any) => ({
+      const [leavesOnDate, pendingLeaves, weeklyOffs, scheduled, monthRows] = await Promise.all([
+        sql`SELECT employee_id FROM leaves WHERE status = 'approved' AND start_date <= ${date} AND end_date >= ${date};`,
+        sql`SELECT employee_id FROM leaves WHERE status = 'pending' AND start_date <= ${date} AND end_date >= ${date};`,
+        sql`
+          SELECT employee_id FROM weekly_offs
+          WHERE weekday = EXTRACT(DOW FROM ${date}::date)::integer
+            AND effective_from <= ${date}
+            AND (effective_to IS NULL OR effective_to >= ${date});
+        `,
+        sql`
+          SELECT employee_id FROM roster_days
+          WHERE roster_month_id = ${`roster-${date.slice(0, 7)}`}
+            AND date = ${date}
+            AND status IN ('working', 'leave', 'weekly_off', 'holiday');
+        `,
+        sql`SELECT status FROM roster_months WHERE month = ${date.slice(0, 7)} LIMIT 1;`,
+      ]);
+      const unavailableIds = new Set([
+        ...leavesOnDate.map((row: any) => row.employee_id),
+        ...pendingLeaves.map((row: any) => row.employee_id),
+        ...weeklyOffs.map((row: any) => row.employee_id),
+        ...scheduled.map((row: any) => row.employee_id),
+      ]);
+      const availableCandidates = certifiedStaff.filter((candidate: any) => !unavailableIds.has(candidate.id)).map((c: any) => ({
           employeeId: c.id,
           employeeName: c.employee_name,
           email: c.email,
@@ -654,24 +861,78 @@ async function executeTool(
         brandName: targetBp.brand_name,
         processCode: targetBp.process_code,
         date,
+        rosterStatus: monthRows[0]?.status || "not generated",
         totalCertified: certifiedStaff.length,
         backupsCount: availableCandidates.length,
         backups: availableCandidates,
+        employeesWithPendingLeave: certifiedStaff
+          .filter((candidate: any) => pendingLeaves.some((leave: any) => leave.employee_id === candidate.id))
+          .map((candidate: any) => candidate.employee_name),
+        availabilityRule: monthRows.length
+          ? "Candidates exclude approved or pending leave, effective weekly offs, and all existing roster assignments for this date."
+          : "No roster is generated for this month; candidates exclude approved or pending leave and effective weekly offs, but current workload cannot be verified.",
       };
     }
 
     // 6. Conflicts Breakdown
     case "get_conflicts": {
-      const conflicts = await sql`
-        SELECT c.id, c.type, c.severity, c.date, c.message, c.suggested_fix, b.name as brand_name, p.code as process_code, e.name as employee_name
+      if (userRole === "employee") {
+        return { error: "Only managers and pod leads can view roster-wide conflicts.", denied: true };
+      }
+      if (args.date && !isValidDate(args.date)) {
+        return { error: "Filter date must be a valid YYYY-MM-DD date." };
+      }
+      if (args.severity && !["blocking", "warning"].includes(args.severity)) {
+        return { error: "Severity filter must be blocking or warning." };
+      }
+
+      let conflicts = await sql`
+        SELECT c.id, c.type, c.severity, c.date, c.message, c.suggested_fix,
+          c.employee_id, c.brand_process_id, b.name as brand_name, p.code as process_code,
+          e.name as employee_name, e.pod_id
         FROM conflicts c
         LEFT JOIN brand_processes bp ON c.brand_process_id = bp.id
         LEFT JOIN brands b ON bp.brand_id = b.id
         LEFT JOIN processes p ON bp.process_id = p.id
         LEFT JOIN employees e ON c.employee_id = e.id
-        WHERE c.roster_month_id = ${monthId}
+        WHERE c.roster_month_id = ${monthId} AND c.resolved = false
         ORDER BY c.severity DESC, c.date ASC;
       `;
+
+      if (userRole === "pod_lead") {
+        const [podRows, podEmployeeRows, podAssignmentRows] = await Promise.all([
+          sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`,
+          sql`SELECT id FROM employees WHERE pod_id IN (SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId});`,
+          sql`SELECT DISTINCT a.brand_process_id FROM assignments a
+              JOIN employees e ON e.id = a.employee_id
+              WHERE e.pod_id IN (SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId}) AND a.active = true;`,
+        ]);
+        const podIds = new Set(podRows.map((row: any) => row.id));
+        const employeeIds = new Set([
+          callerEmployeeId,
+          ...podEmployeeRows.map((row: any) => row.id),
+        ]);
+        const brandProcessIds = new Set(podAssignmentRows.map((row: any) => row.brand_process_id));
+        conflicts = conflicts.filter((conflict: any) =>
+          employeeIds.has(conflict.employee_id) ||
+          podIds.has(conflict.pod_id) ||
+          brandProcessIds.has(conflict.brand_process_id)
+        );
+      }
+      if (args.date) {
+        conflicts = conflicts.filter((conflict: any) =>
+          conflict.date && formatDateOnly(conflict.date) === args.date
+        );
+      }
+      if (args.severity) {
+        conflicts = conflicts.filter((conflict: any) => conflict.severity === args.severity);
+      }
+      if (args.brand_or_process) {
+        const filter = String(args.brand_or_process).toLowerCase();
+        conflicts = conflicts.filter((conflict: any) =>
+          `${conflict.brand_name || ""} ${conflict.process_code || ""}`.toLowerCase().includes(filter)
+        );
+      }
 
       const blocking = conflicts.filter((c: any) => c.severity === "blocking");
       const warnings = conflicts.filter((c: any) => c.severity === "warning");
@@ -681,18 +942,16 @@ async function executeTool(
         totalCount: conflicts.length,
         blockingCount: blocking.length,
         warningCount: warnings.length,
-        topBlockingConflicts: blocking.slice(0, 6).map((c: any) => ({
+        conflicts: conflicts.map((c: any) => ({
+          id: c.id,
           date: c.date ? formatDateOnly(c.date) : "Any",
           brand: c.brand_name || "Brand",
           process: c.process_code || "Process",
           employee: c.employee_name || "Unassigned",
           type: c.type,
+          severity: c.severity,
           message: c.message,
           suggestedFix: c.suggested_fix,
-        })),
-        warningsSummary: warnings.slice(0, 4).map((w: any) => ({
-          date: w.date ? formatDateOnly(w.date) : "Any",
-          message: w.message,
         })),
       };
     }
@@ -704,15 +963,32 @@ async function executeTool(
         targetEmpId = callerEmployeeId;
       } else if (!targetEmpId && args.employee_name) {
         const empLookup = await sql`
-          SELECT id, name FROM employees WHERE name ILIKE ${`%${args.employee_name}%`} LIMIT 1;
+          SELECT id, name FROM employees WHERE active = true AND name ILIKE ${`%${args.employee_name}%`} ORDER BY name LIMIT 10;
         `;
-        if (empLookup.length > 0) {
+        if (empLookup.length > 1) {
+          return {
+            needsClarification: true,
+            message: "More than one active employee matches that name. Specify the full name or employee ID.",
+            matches: empLookup.map((employee: any) => ({ employeeId: employee.id, name: employee.name })),
+          };
+        }
+        if (empLookup.length === 1) {
           targetEmpId = empLookup[0].id;
         }
       }
 
       if (!targetEmpId) {
         return { error: `Employee "${args.employee_name || ""}" not found in database.` };
+      }
+
+      if (userRole === "pod_lead") {
+        const [employeeRows, podRows] = await Promise.all([
+          sql`SELECT pod_id FROM employees WHERE id = ${targetEmpId} LIMIT 1;`,
+          sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`,
+        ]);
+        if (!employeeRows.length || !podRows.some((pod: any) => pod.id === employeeRows[0].pod_id)) {
+          return { error: "Pod leads can only view schedules for employees in their assigned pod.", denied: true };
+        }
       }
 
       const scheduleRaw = await sql`
@@ -762,6 +1038,13 @@ async function executeTool(
         };
       }
 
+      if (!isExplicitLeaveApprovalRequest(currentMessage)) {
+        return {
+          requiresExplicitApproval: true,
+          message: "Leave approval changes the roster. I can check the impact first; explicitly say 'Approve [employee]' only when you want to commit the approval.",
+        };
+      }
+
       const { leave_id, employee_name } = args;
       let targetLeave: any = null;
 
@@ -785,9 +1068,21 @@ async function executeTool(
           LEFT JOIN pods p ON e.pod_id = p.id
           WHERE l.status = 'pending' AND e.name ILIKE ${`%${employee_name}%`}
           ORDER BY l.start_date ASC
-          LIMIT 1;
+          LIMIT 10;
         `;
-        if (pendingRows.length > 0) {
+        if (pendingRows.length > 1) {
+          return {
+            needsClarification: true,
+            message: "More than one pending leave matches that name. Specify the employee's full name or leave request ID.",
+            matches: pendingRows.map((leave: any) => ({
+              leaveId: leave.id,
+              employee: leave.employee_name,
+              startDate: formatDateOnly(leave.start_date),
+              endDate: formatDateOnly(leave.end_date),
+            })),
+          };
+        }
+        if (pendingRows.length === 1) {
           targetLeave = pendingRows[0];
         } else {
           const approvedRows = await sql`
@@ -797,9 +1092,15 @@ async function executeTool(
             LEFT JOIN pods p ON e.pod_id = p.id
             WHERE l.status = 'approved' AND e.name ILIKE ${`%${employee_name}%`}
             ORDER BY l.start_date DESC
-            LIMIT 1;
+            LIMIT 10;
           `;
-          if (approvedRows.length > 0) {
+          if (approvedRows.length > 1) {
+            return {
+              needsClarification: true,
+              message: "More than one approved leave matches that name. Specify the leave request ID.",
+            };
+          }
+          if (approvedRows.length === 1) {
             const al = approvedRows[0];
             return {
               alreadyApproved: true,
@@ -815,26 +1116,13 @@ async function executeTool(
       }
 
       if (!targetLeave) {
-        const anyPending = await sql`
-          SELECT l.*, e.name as employee_name, e.pod_id, p.name as pod_name
-          FROM leaves l
-          JOIN employees e ON l.employee_id = e.id
-          LEFT JOIN pods p ON e.pod_id = p.id
-          WHERE l.status = 'pending'
-          ORDER BY l.start_date ASC
-          LIMIT 1;
-        `;
-        if (anyPending.length > 0) {
-          targetLeave = anyPending[0];
-        } else {
-          return {
-            noPending: true,
-            requestedName: employee_name || null,
-            message: employee_name
-              ? `No pending leave requests found for "${employee_name}". The approvals queue has no open requests for this name.`
-              : "No pending leave requests found in the system queue.",
-          };
-        }
+        return {
+          noPending: true,
+          requestedName: employee_name || null,
+          message: employee_name
+            ? `No pending leave requests found for "${employee_name}".`
+            : "Specify the employee name or leave request ID; I will not choose a leave request automatically.",
+        };
       }
 
       if (userRole === "pod_lead") {
@@ -884,6 +1172,7 @@ async function executeTool(
           candidates: sb.candidates.map((cd: any) => ({ employeeName: cd.employeeName })),
         })),
         metrics: result.metrics,
+        notificationWarning: result.notificationWarning,
       };
     }
 
@@ -892,6 +1181,9 @@ async function executeTool(
       const { employee_name, leave_id } = args;
 
       let targetLeave: any = null;
+      if (!leave_id && !employee_name) {
+        return { error: "Specify a leave request ID or employee name to simulate its impact." };
+      }
       if (leave_id) {
         const rows = await sql`
           SELECT l.*, e.name as employee_name, e.pod_id, p.name as pod_name
@@ -909,24 +1201,23 @@ async function executeTool(
           FROM leaves l
           JOIN employees e ON l.employee_id = e.id
           LEFT JOIN pods p ON e.pod_id = p.id
-          WHERE (l.status = 'pending' OR l.status = 'approved')
-            AND e.name ILIKE ${`%${employee_name}%`}
-          ORDER BY l.start_date ASC LIMIT 1;
-        `;
-        if (rows.length > 0) targetLeave = rows[0];
-      }
-
-      if (!targetLeave) {
-        // Fallback: take first pending leave
-        const rows = await sql`
-          SELECT l.*, e.name as employee_name, e.pod_id, p.name as pod_name
-          FROM leaves l
-          JOIN employees e ON l.employee_id = e.id
-          LEFT JOIN pods p ON e.pod_id = p.id
           WHERE l.status = 'pending'
-          ORDER BY l.start_date ASC LIMIT 1;
+            AND e.name ILIKE ${`%${employee_name}%`}
+          ORDER BY l.start_date ASC LIMIT 10;
         `;
-        if (rows.length > 0) targetLeave = rows[0];
+        if (rows.length > 1) {
+          return {
+            needsClarification: true,
+            message: "More than one pending leave matches that name. Specify the full name or leave request ID.",
+            matches: rows.map((leave: any) => ({
+              id: leave.id,
+              employee: leave.employee_name,
+              startDate: formatDateOnly(leave.start_date),
+              endDate: formatDateOnly(leave.end_date),
+            })),
+          };
+        }
+        if (rows.length === 1) targetLeave = rows[0];
       }
 
       if (!targetLeave) {
@@ -934,27 +1225,56 @@ async function executeTool(
           error: "No pending leave application found to analyze.",
         };
       }
+      if (userRole === "pod_lead") {
+        const podRows = await sql`SELECT lead_employee_id FROM pods WHERE id = ${targetLeave.pod_id} LIMIT 1;`;
+        if (!podRows.length || podRows[0].lead_employee_id !== callerEmployeeId) {
+          return { error: "Pod leads can only review leave impact for employees in their assigned pod.", denied: true };
+        }
+      }
 
       const startDate = formatDateOnly(targetLeave.start_date);
       const endDate = formatDateOnly(targetLeave.end_date);
+      const monthStart = `${month}-01`;
+      const [monthYear, monthNumber] = month.split("-").map(Number);
+      const monthEnd = `${month}-${String(new Date(Date.UTC(monthYear, monthNumber, 0)).getUTCDate()).padStart(2, "0")}`;
+      const effectiveStart = startDate > monthStart ? startDate : monthStart;
+      const effectiveEnd = endDate < monthEnd ? endDate : monthEnd;
+      if (effectiveStart > effectiveEnd) {
+        return {
+          error: `This leave does not overlap the selected roster month (${month}). Select a month within ${startDate} to ${endDate}.`,
+        };
+      }
 
       // Find all brand processes assigned to this employee
       const assignedBp = await sql`
-        SELECT bp.id, bp.brand_id, bp.process_id, bp.operating_calendar, bp.min_headcount_weekday, bp.min_headcount_sunday, b.name as brand_name, p.code as process_code
+        SELECT bp.id, bp.brand_id, bp.process_id,
+               COALESCE(mr.operating_calendar, bp.operating_calendar) AS operating_calendar,
+               COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) AS min_headcount_weekday,
+               COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) AS min_headcount_sunday,
+               COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) AS min_headcount_holiday,
+               b.name as brand_name, p.code as process_code
         FROM assignments a
         JOIN brand_processes bp ON a.brand_process_id = bp.id
         JOIN brands b ON bp.brand_id = b.id
         JOIN processes p ON bp.process_id = p.id
-        WHERE a.employee_id = ${targetLeave.employee_id};
+        LEFT JOIN roster_month_rules mr ON mr.brand_process_id = bp.id AND mr.month = ${month}
+        WHERE a.employee_id = ${targetLeave.employee_id} AND a.active = true AND bp.active = true
+          AND a.start_date <= ${effectiveEnd}
+          AND (a.end_date IS NULL OR a.end_date >= ${effectiveStart});
       `;
 
-      // Check dates in range
-      const startNum = parseInt(startDate.slice(8), 10);
-      const endNum = parseInt(endDate.slice(8), 10);
+      // Check dates in the selected month only.
       const dateList: string[] = [];
-      for (let d = startNum; d <= endNum; d++) {
-        dateList.push(`${startDate.slice(0, 8)}${String(d).padStart(2, "0")}`);
+      const dateCursor = new Date(`${effectiveStart}T00:00:00.000Z`);
+      const dateEnd = new Date(`${effectiveEnd}T00:00:00.000Z`);
+      while (dateCursor <= dateEnd) {
+        dateList.push(dateCursor.toISOString().slice(0, 10));
+        dateCursor.setUTCDate(dateCursor.getUTCDate() + 1);
       }
+      const holidaysInRange = await sql`
+        SELECT date FROM holidays WHERE date >= ${effectiveStart} AND date <= ${effectiveEnd};
+      `;
+      const holidayDates = new Set(holidaysInRange.map((holiday: any) => formatDateOnly(holiday.date)));
 
       // Analyze conflicts per brand process
       const conflictsDetected: any[] = [];
@@ -963,14 +1283,19 @@ async function executeTool(
       for (const bp of assignedBp) {
         for (const curDate of dateList) {
           const dObj = new Date(curDate);
-          const isSunday = dObj.getDay() === 0;
-          const required = isSunday ? bp.min_headcount_sunday : bp.min_headcount_weekday;
+          const isSunday = dObj.getUTCDay() === 0;
+          const isHoliday = holidayDates.has(curDate);
+          const required = isHoliday
+            ? bp.min_headcount_holiday
+            : isSunday
+              ? bp.min_headcount_sunday
+              : bp.min_headcount_weekday;
 
           // Check if operating calendar requires coverage on this day
           const requiresCoverage =
             bp.operating_calendar === "all_365" ||
-            (bp.operating_calendar === "daily_no_holidays" && !isSunday) ||
-            (!isSunday && bp.operating_calendar === "mon_sat_no_holidays");
+            (!isHoliday && bp.operating_calendar === "daily_no_holidays") ||
+            (!isHoliday && !isSunday && bp.operating_calendar === "mon_sat_no_holidays");
 
           if (requiresCoverage && required > 0) {
             // Count other staff working on that date for this brand_process
@@ -1014,20 +1339,50 @@ async function executeTool(
           JOIN employees e ON a.employee_id = e.id
           LEFT JOIN pods p ON e.pod_id = p.id
           JOIN brand_processes bp2 ON a.brand_process_id = bp2.id
-          WHERE (bp2.process_id = ${bp.process_id} OR bp2.brand_id = ${bp.brand_id} OR e.pod_id = ${targetLeave.pod_id})
+          WHERE (bp2.process_id = ${bp.process_id} OR bp2.brand_id = ${bp.brand_id})
             AND e.id != ${targetLeave.employee_id}
-            AND e.active = true;
+            AND e.active = true AND a.active = true AND bp2.active = true
+            AND a.start_date <= ${effectiveEnd}
+            AND (a.end_date IS NULL OR a.end_date >= ${effectiveStart});
         `;
 
-        // Exclude anyone on approved leave
-        const leaveStaff = await sql`
-          SELECT employee_id FROM leaves
-          WHERE status = 'approved' AND start_date <= ${endDate} AND end_date >= ${startDate};
-        `;
-        const leaveIds = new Set(leaveStaff.map((l: any) => l.employee_id));
-
+        const candidateIds = certifiedStaff.map((candidate: any) => candidate.id);
+        const [leaveStaff, weeklyOffStaff, scheduledStaff] = await Promise.all([
+          sql`
+            SELECT employee_id, start_date, end_date, status FROM leaves
+            WHERE employee_id = ANY(${candidateIds}) AND status IN ('approved', 'pending')
+              AND start_date <= ${effectiveEnd} AND end_date >= ${effectiveStart};
+          `,
+          sql`
+            SELECT employee_id, weekday, effective_from, effective_to FROM weekly_offs
+            WHERE employee_id = ANY(${candidateIds})
+              AND effective_from <= ${effectiveEnd}
+              AND (effective_to IS NULL OR effective_to >= ${effectiveStart});
+          `,
+          sql`
+            SELECT employee_id, date FROM roster_days
+            WHERE roster_month_id = ${monthId} AND date >= ${effectiveStart} AND date <= ${effectiveEnd}
+              AND status IN ('working', 'leave', 'weekly_off', 'holiday');
+          `,
+        ]);
         const available = certifiedStaff
-          .filter((c: any) => !leaveIds.has(c.id))
+          .filter((candidate: any) => dateList.every((date) => {
+            const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+            return !leaveStaff.some((leave: any) =>
+              leave.employee_id === candidate.id &&
+              formatDateOnly(leave.start_date) <= date &&
+              formatDateOnly(leave.end_date) >= date
+            ) &&
+            !weeklyOffStaff.some((off: any) =>
+              off.employee_id === candidate.id &&
+              off.weekday === weekday &&
+              formatDateOnly(off.effective_from) <= date &&
+              (!off.effective_to || formatDateOnly(off.effective_to) >= date)
+            ) &&
+            !scheduledStaff.some((scheduled: any) =>
+              scheduled.employee_id === candidate.id && formatDateOnly(scheduled.date) === date
+            );
+          }))
           .map((c: any) => ({
             employeeId: c.id,
             employeeName: c.employee_name,
@@ -1064,7 +1419,7 @@ async function executeTool(
       };
     }
 
-    // 10. Direct Shift Appointment & Replacement Assignment with Portal Notifications
+    // 10. Direct Shift Appointment; notifications require a separate explicit request
     case "assign_replacement_employee": {
       if (userRole !== "manager" && userRole !== "pod_lead") {
         return {
@@ -1078,7 +1433,6 @@ async function executeTool(
         date_or_range,
         brand_or_process,
         original_employee_name,
-        approve_leave = true,
       } = args;
       if (!replacement_employee_name || !date_or_range || !brand_or_process) {
         return {
@@ -1088,16 +1442,29 @@ async function executeTool(
 
       // 1. Find replacement employee
       const repRows = await sql`
-        SELECT e.id, e.name, e.email, p.name as pod_name
+        SELECT e.id, e.name, e.email, e.pod_id, p.name as pod_name
         FROM employees e
         LEFT JOIN pods p ON e.pod_id = p.id
-        WHERE e.name ILIKE ${`%${replacement_employee_name}%`}
-        LIMIT 1;
+        WHERE e.active = true AND e.name ILIKE ${`%${replacement_employee_name}%`}
+        ORDER BY e.name ASC LIMIT 10;
       `;
       if (repRows.length === 0) {
         return { error: `Employee "${replacement_employee_name}" not found in database.` };
       }
+      if (repRows.length > 1) {
+        return {
+          needsClarification: true,
+          message: "More than one active employee matches that name. Specify the employee's full name.",
+          matches: repRows.map((employee: any) => ({ employeeId: employee.id, name: employee.name, pod: employee.pod_name })),
+        };
+      }
       const repEmp = repRows[0];
+      if (userRole === "pod_lead") {
+        const podRows = await sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`;
+        if (!podRows.some((pod: any) => pod.id === repEmp.pod_id)) {
+          return { error: "Pod leads can only assign employees in their assigned pod.", denied: true };
+        }
+      }
 
       // 2. Parse dates
       const rawDate = String(date_or_range);
@@ -1136,34 +1503,47 @@ async function executeTool(
         SELECT bp.*, b.name as brand_name, p.code as process_code
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
-        JOIN processes p ON bp.process_id = p.id;
+        JOIN processes p ON bp.process_id = p.id
+        WHERE bp.active = true AND b.active = true;
       `;
 
       if (brand_or_process) {
         const words = brand_or_process.toLowerCase().split(/\s+/).filter(Boolean);
-        targetBp =
-          allBp.find((b: any) => words.every((w: string) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(w))) ||
-          allBp.find((b: any) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(words[0]));
+        const targetMatches = allBp.filter((b: any) =>
+          words.every((word: string) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(word))
+        );
+        if (targetMatches.length > 1) {
+          return {
+            needsClarification: true,
+            message: "More than one brand/process matches. Specify both the brand and process.",
+            matches: targetMatches.map((item: any) => ({ brand: item.brand_name, process: item.process_code })),
+          };
+        }
+        targetBp = targetMatches[0] || null;
       }
 
       // If not specified, look up original employee's brand process
       let origEmp: any = null;
       if (original_employee_name) {
         const oRows = await sql`
-          SELECT id, name FROM employees WHERE name ILIKE ${`%${original_employee_name}%`} LIMIT 1;
+          SELECT id, name FROM employees
+          WHERE active = true AND name ILIKE ${`%${original_employee_name}%`}
+          ORDER BY name ASC LIMIT 10;
         `;
-        if (oRows.length > 0) origEmp = oRows[0];
+        if (oRows.length > 1) {
+          return {
+            needsClarification: true,
+            message: "More than one active employee matches the employee being replaced. Specify the full name.",
+            matches: oRows.map((employee: any) => ({ employeeId: employee.id, name: employee.name })),
+          };
+        }
+        if (oRows.length === 1) origEmp = oRows[0];
       }
-      if (!origEmp) {
-        const pendingOnDate = await sql`
-          SELECT l.*, e.name as employee_name, e.id as employee_id
-          FROM leaves l
-          JOIN employees e ON l.employee_id = e.id
-          WHERE l.status = 'pending' AND l.start_date <= ${dateList[0]} AND l.end_date >= ${dateList[0]}
-          LIMIT 1;
-        `;
-        if (pendingOnDate.length > 0) {
-          origEmp = { id: pendingOnDate[0].employee_id, name: pendingOnDate[0].employee_name };
+      if (userRole === "pod_lead" && origEmp) {
+        const podRows = await sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`;
+        const employeeRows = await sql`SELECT pod_id FROM employees WHERE id = ${origEmp.id} LIMIT 1;`;
+        if (!employeeRows.length || !podRows.some((pod: any) => pod.id === employeeRows[0].pod_id)) {
+          return { error: "Pod leads can only make replacement assignments within their assigned pod.", denied: true };
         }
       }
 
@@ -1184,8 +1564,47 @@ async function executeTool(
         return { error: `No configured brand or process matches "${brand_or_process}".` };
       }
 
-      // 4. Update roster days for replacement employee
-      const assignedNotes = `Appointed replacement covering for ${origEmp?.name || "peer"} (${targetBp.brand_name} ${targetBp.process_code})`;
+      const availabilityIssues: Array<{ date: string; issue: string }> = [];
+      for (const date of dateList) {
+        const [eligible, approvedLeave, weeklyOff, scheduled] = await Promise.all([
+          sql`
+            SELECT a.id FROM assignments a
+            JOIN brand_processes bp ON a.brand_process_id = bp.id
+            WHERE a.employee_id = ${repEmp.id} AND a.active = true AND bp.active = true
+              AND (bp.id = ${targetBp.id} OR bp.process_id = ${targetBp.process_id} OR bp.brand_id = ${targetBp.brand_id})
+              AND a.start_date <= ${date} AND (a.end_date IS NULL OR a.end_date >= ${date})
+            LIMIT 1;
+          `,
+          sql`SELECT id, status FROM leaves WHERE employee_id = ${repEmp.id} AND status IN ('approved', 'pending') AND start_date <= ${date} AND end_date >= ${date} LIMIT 1;`,
+          sql`
+            SELECT id FROM weekly_offs
+            WHERE employee_id = ${repEmp.id}
+              AND weekday = EXTRACT(DOW FROM ${date}::date)::integer
+              AND effective_from <= ${date}
+              AND (effective_to IS NULL OR effective_to >= ${date})
+            LIMIT 1;
+          `,
+          sql`
+            SELECT status FROM roster_days
+            WHERE roster_month_id = ${monthId} AND employee_id = ${repEmp.id} AND date = ${date}
+              AND status IN ('working', 'leave', 'weekly_off', 'holiday')
+            LIMIT 1;
+          `,
+        ]);
+        if (!eligible.length) availabilityIssues.push({ date, issue: "no active qualifying assignment" });
+        if (approvedLeave.length) availabilityIssues.push({ date, issue: `${approvedLeave[0].status} leave request` });
+        if (weeklyOff.length) availabilityIssues.push({ date, issue: "weekly off" });
+        if (scheduled.length) availabilityIssues.push({ date, issue: "already has a roster assignment" });
+      }
+      if (availabilityIssues.length) {
+        return {
+          error: `${repEmp.name} is not available for every requested date.`,
+          availabilityIssues,
+        };
+      }
+
+      // 4. Add the assignment without changing leave status or resolving conflicts implicitly.
+      const assignedNotes = `Manager-assigned coverage${origEmp ? ` replacing ${origEmp.name}` : ""} (${targetBp.brand_name} ${targetBp.process_code})`;
       for (const d of dateList) {
         const rdId = `rd-${monthId}-${repEmp.id}-${d}-${targetBp.id}`;
         await sql`
@@ -1194,46 +1613,7 @@ async function executeTool(
           ON CONFLICT (id)
           DO UPDATE SET status = 'working', brand_process_id = EXCLUDED.brand_process_id, pinned = true, notes = EXCLUDED.notes, updated_at = now();
         `;
-
-        // If original employee provided, mark their status as 'leave'
-        if (origEmp) {
-          const origRdId = `rd-${monthId}-${origEmp.id}-${d}-none`;
-          await sql`
-            INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-            VALUES (${origRdId}, ${monthId}, ${origEmp.id}, ${d}, 'leave', null, true, 'Approved planned leave', now(), now())
-            ON CONFLICT (id)
-            DO UPDATE SET status = 'leave', brand_process_id = null, pinned = true, notes = 'Approved planned leave', updated_at = now();
-          `;
-
-          // Resolve blocking conflicts for this brand process
-          await sql`
-            UPDATE conflicts
-            SET resolved = true, updated_at = now()
-            WHERE roster_month_id = ${monthId}
-              AND (brand_process_id = ${targetBp.id} OR employee_id = ${origEmp.id})
-              AND date = ${d};
-          `;
-        }
       }
-
-      // 5. Approve pending leave if applicable
-      if (origEmp && approve_leave !== false) {
-        await sql`
-          UPDATE leaves
-          SET status = 'approved', reviewed_by = ${userId || null}, reviewed_at = now(), updated_at = now()
-          WHERE employee_id = ${origEmp.id} AND status = 'pending';
-        `;
-      }
-
-      // 6. Send official notification to the Employee Portal
-      const notifId = `notif-${Date.now()}-${repEmp.id}`;
-      const notifTitle = "Shift Appointment Notification";
-      const notifMsg = `You have been appointed to cover ${targetBp.brand_name} (${targetBp.process_code}) on ${dateList.join(", ")}, replacing ${origEmp?.name || "a team member on leave"}.`;
-
-      await sql`
-        INSERT INTO notifications (id, employee_id, title, message, type, date, read, created_at, updated_at)
-        VALUES (${notifId}, ${repEmp.id}, ${notifTitle}, ${notifMsg}, 'shift_appointment', ${dateList[0]}, false, now(), now());
-      `;
 
       // 7. Audit log
       await sql`
@@ -1250,7 +1630,7 @@ async function executeTool(
             targetBrand: targetBp.brand_name,
             process: targetBp.process_code,
             replacedEmployee: origEmp?.name,
-            notificationId: notifId,
+            notificationSent: false,
           })},
           now(),
           now()
@@ -1265,10 +1645,11 @@ async function executeTool(
         processCode: targetBp.process_code,
         dates: dateList,
         replacedEmployee: origEmp?.name,
-        leaveApproved: Boolean(origEmp),
-        conflictsResolved: true,
-        notificationSent: true,
-        portalNotificationMessage: notifMsg,
+        leaveApproved: false,
+        conflictsResolved: false,
+        notificationSent: false,
+        notificationSuggested: true,
+        message: `Roster assignment saved for ${repEmp.name}. Ask whether the manager wants a notification sent to the employee and pod lead.`,
         systemReflected: true,
       };
     }
@@ -1310,6 +1691,87 @@ async function executeTool(
       }
     }
 
+    case "notify_employee": {
+      if (userRole !== "manager") {
+        return { error: "Only managers can send employee notifications.", denied: true };
+      }
+      if (!isExplicitNotificationRequest(currentMessage, previousAssistantMessage)) {
+        return {
+          requiresConfirmation: true,
+          message: "I can send this notification after you explicitly ask me to notify the named employee.",
+        };
+      }
+
+      const employeeName = String(args.employee_name || "").trim();
+      const title = String(args.title || "").trim();
+      const message = String(args.message || "").trim();
+      const date = args.date == null || args.date === "" ? null : String(args.date);
+      if (!employeeName || !title || !message || title.length > 120 || message.length > 1000) {
+        return { error: "Provide an employee, a title up to 120 characters, and a message up to 1,000 characters." };
+      }
+      if (/\b(password|passcode|secret|api key|access token)\b/i.test(`${title} ${message}`)) {
+        return { error: "Notifications cannot contain passwords, secrets, or access tokens." };
+      }
+      if (date && !isValidDate(date)) {
+        return { error: "Notification date must be a valid YYYY-MM-DD date." };
+      }
+
+      const employees = args.employee_id
+        ? await sql`
+            SELECT e.id, e.name, e.pod_id, p.lead_employee_id
+            FROM employees e
+            LEFT JOIN pods p ON p.id = e.pod_id
+            WHERE e.active = true AND e.id = ${args.employee_id}
+            LIMIT 2;
+          `
+        : await sql`
+            SELECT e.id, e.name, e.pod_id, p.lead_employee_id
+            FROM employees e
+            LEFT JOIN pods p ON p.id = e.pod_id
+            WHERE e.active = true AND LOWER(e.name) = LOWER(${employeeName})
+            LIMIT 2;
+          `;
+      if (employees.length === 0) {
+        return { error: `No active employee exactly matches "${employeeName}".` };
+      }
+      if (employees.length > 1) {
+        return {
+          needsClarification: true,
+          message: "More than one active employee has that exact name. Specify the employee ID.",
+        };
+      }
+      const employee = employees[0];
+      const { notificationId, podLeadNotificationId } = await createEmployeeNotification(sql, {
+        employeeId: employee.id,
+        title,
+        message,
+        type: "manager_message",
+        date,
+        metadata: { source: "ai_assistant" },
+        notifyPodLead: true,
+      });
+      const podLeadNotified = Boolean(podLeadNotificationId);
+
+      await sql`
+        INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
+        VALUES (
+          ${`audit-${randomUUID()}`}, ${userId || null}, 'EMPLOYEE_NOTIFICATION_SENT',
+          'notifications', ${notificationId},
+          ${JSON.stringify({ employeeId: employee.id, title, date, podLeadNotified })}::jsonb,
+          now(), now()
+        );
+      `;
+
+      return {
+        success: true,
+        systemReflected: true,
+        notificationSent: true,
+        employee: employee.name,
+        podLeadNotified,
+        message: `Notification sent to ${employee.name}${podLeadNotified ? " and their pod lead" : ""}.`,
+      };
+    }
+
     // 12. get_import_summary
     case "get_import_summary": {
       const recentImports = await sql`
@@ -1342,7 +1804,7 @@ async function executeTool(
         employeeRows = await sql`
           SELECT e.id, e.name, e.email, e.pod_id, e.active
           FROM employees e
-          WHERE e.pod_id = (SELECT pod_id FROM employees WHERE id = ${callerEmployeeId})
+          WHERE e.pod_id IN (SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId})
           ORDER BY e.name;
         `;
       } else if (callerEmployeeId) {
@@ -1359,7 +1821,7 @@ async function executeTool(
         ? await sql`SELECT id, name, lead_employee_id FROM pods ORDER BY name;`
         : await sql`
             SELECT id, name, lead_employee_id FROM pods
-            WHERE id IN (SELECT pod_id FROM employees WHERE id = ${callerEmployeeId});
+            WHERE lead_employee_id = ${callerEmployeeId};
           `;
       if (employeeIds.length === 0) {
         return {
@@ -1386,8 +1848,10 @@ async function executeTool(
           SELECT a.employee_id, e.name AS employee_name, p.name AS pod_name,
                  b.code AS brand_code, b.name AS brand_name, b.category,
                  pr.code AS process_code, pr.name AS process_name,
-                 bp.operating_calendar, bp.min_headcount_weekday,
-                 bp.min_headcount_sunday, bp.min_headcount_holiday,
+                 COALESCE(mr.operating_calendar, bp.operating_calendar) AS operating_calendar,
+                 COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) AS min_headcount_weekday,
+                 COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) AS min_headcount_sunday,
+                 COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) AS min_headcount_holiday,
                  a.start_date, a.end_date, a.priority, a.is_exclusive
           FROM assignments a
           JOIN employees e ON e.id = a.employee_id
@@ -1395,6 +1859,7 @@ async function executeTool(
           JOIN brand_processes bp ON bp.id = a.brand_process_id
           JOIN brands b ON b.id = bp.brand_id
           JOIN processes pr ON pr.id = bp.process_id
+          LEFT JOIN roster_month_rules mr ON mr.brand_process_id = bp.id AND mr.month = ${targetMonth}
           WHERE a.active = true
             AND bp.active = true
             AND a.employee_id = ANY(${employeeIds})
@@ -1547,11 +2012,26 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { message, month = new Date().toISOString().slice(0, 7) } = body;
+  const { message } = body;
+  const month = body.month || new Date().toISOString().slice(0, 7);
 
   if (!message || typeof message !== "string") {
     return NextResponse.json({ error: "Message string is required" }, { status: 400 });
   }
+  if (!isValidRosterMonth(month)) {
+    return NextResponse.json({ error: "Month must use valid YYYY-MM format." }, { status: 400 });
+  }
+
+  const history: Array<{ role: "user" | "assistant"; content: string }> = Array.isArray(body.history)
+    ? body.history
+        .filter((entry: any) =>
+          entry && (entry.role === "user" || entry.role === "assistant") && typeof entry.content === "string"
+        )
+        .slice(-10)
+        .map((entry: any) => ({ role: entry.role, content: entry.content.slice(0, 2000) }))
+    : [];
+  const previousAssistantMessage =
+    [...history].reverse().find((entry) => entry.role === "assistant")?.content || "";
 
   const rawKey = process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY || "";
   // Sanitize key: eliminate any accidental newlines, duplicate lines or carriage returns
@@ -1569,7 +2049,9 @@ User session: ${user!.email} (role: ${user!.role})
 Roster month: ${month}
 Latest committed import: ${activeImportId ? `${activeImportId} (${latestImportRec[0].filename})` : "none"}
 
-Use the provided tools to answer from live database records. Never invent people, brands, dates, coverage numbers, or actions. Keep the caller's role-based access boundaries. If the database has no relevant records, state that clearly and direct managers to the import page. Before making a roster change, ensure the user specified the employee, dates, and configured brand/process needed for that action. Confirm an action only when its tool result reports success.`;
+Use the provided tools for every question about live roster, employee, pod, brand, process, assignment, availability, conflict, leave, or import data. Answer from live database records, not memory. Never invent people, brands, dates, coverage numbers, leave statuses, or actions. If the requested detail is missing, a name is ambiguous, or the database cannot verify availability, ask a focused clarifying question and do not guess. Explain the evidence and any remaining conflicts; never claim coverage is resolved while blocking conflicts remain. Respect the caller's role and data scope, and never expose passwords or secrets.
+
+Treat write actions carefully. Approve a leave only after a direct instruction to approve a specific employee's request; hypothetical questions are read-only and should use the impact/conflict tools. Make an assignment only when employee, date(s), and configured brand/process are clear. Assignment alone must not approve leave, resolve conflicts automatically, or send a notification. After a successful assignment, ask whether the manager wants the employee and pod lead notified. Call notify_employee only after a direct manager request or a clear confirmation to your immediately preceding notification offer.`;
 
   try {
     let replyText = "";
@@ -1582,6 +2064,7 @@ Use the provided tools to answer from live database records. Never invent people
       try {
         const messages: any[] = [
           { role: "system", content: systemPrompt },
+          ...history,
           { role: "user", content: message },
         ];
 
@@ -1631,15 +2114,25 @@ Use the provided tools to answer from live database records. Never invent people
               let parsedArgs: any = {};
               try {
                 parsedArgs = JSON.parse(call.function.arguments || "{}");
-              } catch {}
+              } catch {
+                toolResult = { error: "The assistant produced invalid tool arguments; no action was taken." };
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: JSON.stringify(toolResult),
+                });
+                continue;
+              }
 
               toolUsed = funcName;
               const res = await executeTool(
                 funcName,
-                { ...parsedArgs, month },
+                { ...parsedArgs, month: parsedArgs.month ?? month },
                 user!.role,
                 user!.employeeId,
-                user!.id
+                user!.id,
+                message,
+                previousAssistantMessage
               );
               toolResult = res;
               if (res?.systemReflected) systemReflected = true;

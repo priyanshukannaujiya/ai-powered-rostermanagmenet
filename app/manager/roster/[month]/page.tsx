@@ -182,9 +182,9 @@ export default function RosterGridPage({ params }: { params: { month: string } }
       const json = await res.json();
       if (res.ok) {
         showToast({
-          type: "success",
-          title: "Roster Solved & Generated",
-          message: `Generated schedule for ${formatMonthYear(month)} with ${json.conflictsCount ?? 0} conflict(s).`,
+          type: (json.conflictsCount ?? 0) > 0 ? "warning" : "success",
+          title: (json.conflictsCount ?? 0) > 0 ? "Roster generated with conflicts" : "Roster generated",
+          message: `Generated schedule for ${formatMonthYear(month)} with ${json.conflictsCount ?? 0} conflict(s). Review all conflicts before publishing.`,
         });
         mutate();
       } else {

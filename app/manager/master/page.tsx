@@ -6,6 +6,7 @@ import {
   Database,
   Plus,
   Trash2,
+  Pencil,
   Users,
   Building2,
   Cpu,
@@ -25,7 +26,12 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = async (url: string) => {
+  const response = await fetch(url);
+  const json = await response.json();
+  if (!response.ok) throw new Error(json.error || "Failed to fetch master data.");
+  return json;
+};
 
 export default function MasterDataPage() {
   const { showToast } = useToast();
@@ -37,27 +43,40 @@ export default function MasterDataPage() {
   // New item modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [formData, setFormData] = useState<any>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const { data: employeesData, mutate: mutateEmployees } = useSWR("/api/master/employees", fetcher);
+  const { data: podsData, mutate: mutatePods } = useSWR("/api/master/pods", fetcher);
+  const { data: brandsData, mutate: mutateBrands } = useSWR("/api/master/brands", fetcher);
+  const { data: processesData, mutate: mutateProcesses } = useSWR("/api/master/processes", fetcher);
+  const { data: brandProcessesData, mutate: mutateBrandProcesses } = useSWR("/api/master/brand_processes", fetcher);
 
   // Custom Delete Confirm Dialog
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; entity: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/master/${activeTab}?id=${deleteTarget.id}`, {
+      const res = await fetch(`/api/master/${deleteTarget.entity}?id=${encodeURIComponent(deleteTarget.id)}`, {
         method: "DELETE",
       });
       if (res.ok) {
         showToast({
           type: "info",
-          title: "Record Deleted",
-          message: `Successfully removed ${deleteTarget.name}.`,
+          title: "Record Updated",
+          message: `${deleteTarget.name} was deactivated or safely deleted.`,
         });
         setDeleteTarget(null);
-        mutate();
+        await Promise.all([
+          mutate(),
+          mutateEmployees(),
+          mutatePods(),
+          mutateBrands(),
+          mutateProcesses(),
+          mutateBrandProcesses(),
+        ]);
       } else {
         const json = await res.json();
         showToast({ type: "error", title: "Delete Failed", message: json.error });
@@ -73,8 +92,8 @@ export default function MasterDataPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/master/${activeTab}`, {
-        method: "POST",
+      const res = await fetch(`/api/master/${activeTab}${editingId ? `?id=${encodeURIComponent(editingId)}` : ""}`, {
+        method: editingId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
@@ -82,12 +101,23 @@ export default function MasterDataPage() {
       if (res.ok) {
         showToast({
           type: "success",
-          title: "Record Added",
-          message: "New master record created and indexed.",
+          title: editingId ? "Record Updated" : "Record Added",
+          message: editingId
+            ? "Master data updated. Existing monthly rosters remain unchanged until regenerated."
+            : "Master data created. Generate the affected month to apply it to a roster.",
         });
         setIsAddModalOpen(false);
         setFormData({});
-        mutate();
+        setEditingId(null);
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
+        await Promise.all([
+          mutate(),
+          mutateEmployees(),
+          mutatePods(),
+          mutateBrands(),
+          mutateProcesses(),
+          mutateBrandProcesses(),
+        ]);
       } else {
         const json = await res.json();
         showToast({ type: "error", title: "Creation Failed", message: json.error });
@@ -106,7 +136,64 @@ export default function MasterDataPage() {
     { id: "processes", label: "Processes", icon: Cpu },
     { id: "brand_processes", label: "Brand-Process Rules", icon: Calendar },
     { id: "assignments", label: "Assignments", icon: Database },
+    { id: "weekly_offs", label: "Weekly Offs", icon: Calendar },
+    { id: "holidays", label: "Holidays", icon: Calendar },
   ];
+  const activeLabel: Record<string, string> = {
+    employees: "Employee",
+    pods: "Pod",
+    brands: "Brand",
+    processes: "Process / Task",
+    brand_processes: "Brand-Process Rule",
+    assignments: "Assignment",
+    weekly_offs: "Weekly Off",
+    holidays: "Holiday",
+  };
+
+  const beginCreate = () => {
+    setEditingId(null);
+    setFormData(["employees", "brands", "brand_processes", "assignments"].includes(activeTab) ? { active: true } : {});
+    setIsAddModalOpen(true);
+  };
+
+  const beginEdit = (record: any) => {
+    setEditingId(record.id);
+    setFormData({
+      name: record.name || "",
+      email: record.email || "",
+      podId: record.pod_id || "",
+      leadEmployeeId: record.lead_employee_id || "",
+      code: record.code || "",
+      category: record.category || "",
+      active: record.active ?? true,
+      brandId: record.brand_id || "",
+      processId: record.process_id || "",
+      operatingCalendar: record.operating_calendar || "mon_sat_no_holidays",
+      minHeadcountWeekday: record.min_headcount_weekday ?? 1,
+      minHeadcountSunday: record.min_headcount_sunday ?? 0,
+      minHeadcountHoliday: record.min_headcount_holiday ?? 0,
+      employeeId: record.employee_id || "",
+      brandProcessId: record.brand_process_id || "",
+      startDate: String(record.start_date || "").slice(0, 10),
+      endDate: record.end_date ? String(record.end_date).slice(0, 10) : "",
+      priority: record.priority ?? 1,
+      isExclusive: record.is_exclusive ?? false,
+      weekday: record.weekday ?? 0,
+      effectiveFrom: String(record.effective_from || "").slice(0, 10),
+      effectiveTo: record.effective_to ? String(record.effective_to).slice(0, 10) : "",
+      date: String(record.date || "").slice(0, 10),
+      initialPassword: "",
+    });
+    setIsAddModalOpen(true);
+  };
+
+  const employees = employeesData?.data || [];
+  const pods = podsData?.data || [];
+  const brands = brandsData?.data || [];
+  const processes = processesData?.data || [];
+  const brandProcesses = brandProcessesData?.data || [];
+  const setField = (field: string, value: any) => setFormData((previous: any) => ({ ...previous, [field]: value }));
+  const fieldClass = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500";
 
   const rawRecords = data?.data || [];
 
@@ -133,17 +220,17 @@ export default function MasterDataPage() {
         </div>
 
         <Button
-          onClick={() => {
-            setFormData({});
-            setIsAddModalOpen(true);
-          }}
+          onClick={beginCreate}
           variant="primary"
           size="sm"
           icon={<Plus className="w-4 h-4" />}
         >
-          Add {activeTab.replace("_", " ").slice(0, -1)}
+          Add {activeLabel[activeTab] || "Record"}
         </Button>
       </div>
+      <p className="text-xs text-slate-500">
+        These are shared master records. Changes apply to future roster generation; existing monthly rosters change only when you explicitly regenerate that month.
+      </p>
 
       {/* Tabs & Search Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -214,9 +301,8 @@ export default function MasterDataPage() {
               searchQuery
                 ? () => setSearchQuery("")
                 : () => {
-                    setFormData({});
-                    setIsAddModalOpen(true);
-                  }
+                      beginCreate();
+                    }
             }
           />
         ) : (
@@ -269,10 +355,23 @@ export default function MasterDataPage() {
                             {r.active ? "Active" : "Inactive"}
                           </Badge>
                         )}
+                        {r.has_login !== undefined && (
+                          <Badge variant={r.has_login ? "success" : "neutral"} size="sm">
+                            {r.has_login ? "Login ready" : "No login"}
+                          </Badge>
+                        )}
                       </td>
                       <td className="p-3.5 pr-5 text-right">
                         <button
-                          onClick={() => setDeleteTarget({ id: r.id, name: recordTitle })}
+                          onClick={() => beginEdit(r)}
+                          className="mr-1.5 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                          title="Edit Record"
+                          aria-label={`Edit ${recordTitle}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget({ id: r.id, name: recordTitle, entity: activeTab })}
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                           title="Delete Record"
                           aria-label={`Delete ${recordTitle}`}
@@ -289,78 +388,194 @@ export default function MasterDataPage() {
         )}
       </Card>
 
-      {/* Add Record Modal */}
+      {/* Add or Edit Record Modal */}
       <Modal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          setEditingId(null);
+        }}
         title={
           <div>
             <h3 className="font-bold text-slate-900 text-base">
-              Create New {activeTab.replace("_", " ").toUpperCase()}
+              {editingId ? "Edit" : "Add"} {activeLabel[activeTab] || "Record"}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Enter configuration attributes to register this entity in the scheduling schema.
+              Changes update shared master data and do not rewrite existing monthly rosters.
             </p>
           </div>
         }
         size="md"
       >
-        <form onSubmit={handleCreate} className="space-y-4 text-xs">
-          <div>
-            <label className="font-semibold text-slate-700 block mb-1">
-              Name / Display Title
+        <form onSubmit={handleCreate} className="max-h-[70vh] space-y-4 overflow-y-auto px-1 text-xs">
+          {["employees", "pods", "brands", "processes", "holidays"].includes(activeTab) && (
+            <label className="block font-semibold text-slate-700">
+              {activeTab === "holidays" ? "Holiday name" : activeTab === "processes" ? "Process name" : activeTab === "brands" ? "Brand name" : activeTab === "pods" ? "Pod name" : "Employee name"}
+              <input required className={`${fieldClass} mt-1`} value={formData.name || ""} onChange={(event) => setField("name", event.target.value)} />
             </label>
-            <input
-              type="text"
-              required
-              value={formData.name || ""}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-              placeholder={`e.g. New ${activeTab.replace("_", " ")}`}
-            />
-          </div>
-
+          )}
           {activeTab === "employees" && (
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">
-                Company Email Address
+            <>
+              <label className="block font-semibold text-slate-700">Email address
+                <input type="email" required className={`${fieldClass} mt-1`} value={formData.email || ""} onChange={(event) => setField("email", event.target.value)} />
               </label>
-              <input
-                type="email"
-                required
-                value={formData.email || ""}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                placeholder="colleague@opscompany.com"
-              />
-            </div>
+              <label className="block font-semibold text-slate-700">Pod
+                <select className={`${fieldClass} mt-1`} value={formData.podId || ""} onChange={(event) => setField("podId", event.target.value)}>
+                  <option value="">Unassigned</option>
+                  {pods.map((pod: any) => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
+                </select>
+              </label>
+              <label className="block font-semibold text-slate-700">Initial password{editingId ? " (optional)" : " (optional)"}
+                <input type="password" minLength={12} autoComplete="new-password" className={`${fieldClass} mt-1`} value={formData.initialPassword || ""} onChange={(event) => setField("initialPassword", event.target.value)} />
+                <span className="mt-1 block font-normal text-slate-500">At least 12 characters to create or update this employee&apos;s login. Leave blank to keep no login/new or leave existing credentials unchanged.</span>
+              </label>
+            </>
           )}
-
+          {activeTab === "pods" && (
+            <label className="block font-semibold text-slate-700">Pod lead
+              <select className={`${fieldClass} mt-1`} value={formData.leadEmployeeId || ""} onChange={(event) => setField("leadEmployeeId", event.target.value)}>
+                <option value="">No lead assigned</option>
+                {employees.map((employee: any) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+              </select>
+            </label>
+          )}
+          {activeTab === "brands" && (
+            <>
+              <label className="block font-semibold text-slate-700">Brand code
+                <input required className={`${fieldClass} mt-1 uppercase`} value={formData.code || ""} onChange={(event) => setField("code", event.target.value.toUpperCase())} />
+              </label>
+              <label className="block font-semibold text-slate-700">Category
+                <input className={`${fieldClass} mt-1`} value={formData.category || ""} onChange={(event) => setField("category", event.target.value)} />
+              </label>
+            </>
+          )}
           {activeTab === "processes" && (
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">Process Code</label>
-              <input
-                type="text"
-                required
-                value={formData.code || ""}
-                onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono font-bold"
-                placeholder="e.g. NDR / RET / CS"
-              />
-            </div>
+            <label className="block font-semibold text-slate-700">Process code
+              <input required className={`${fieldClass} mt-1 uppercase`} value={formData.code || ""} onChange={(event) => setField("code", event.target.value.toUpperCase())} />
+            </label>
           )}
-
+          {activeTab === "brand_processes" && (
+            <>
+              <label className="block font-semibold text-slate-700">Brand
+                <select required className={`${fieldClass} mt-1`} value={formData.brandId || ""} onChange={(event) => setField("brandId", event.target.value)}>
+                  <option value="">Select brand</option>
+                  {brands.map((brand: any) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}
+                </select>
+              </label>
+              <label className="block font-semibold text-slate-700">Process / task
+                <select required className={`${fieldClass} mt-1`} value={formData.processId || ""} onChange={(event) => setField("processId", event.target.value)}>
+                  <option value="">Select process</option>
+                  {processes.map((process: any) => <option key={process.id} value={process.id}>{process.name} ({process.code})</option>)}
+                </select>
+              </label>
+              <label className="block font-semibold text-slate-700">Operating calendar
+                <select className={`${fieldClass} mt-1`} value={formData.operatingCalendar || "mon_sat_no_holidays"} onChange={(event) => setField("operatingCalendar", event.target.value)}>
+                  <option value="all_365">Every day, including holidays</option>
+                  <option value="daily_no_holidays">Every day except holidays</option>
+                  <option value="mon_sat_no_holidays">Monday-Saturday, except holidays</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              {([
+                ["minHeadcountWeekday", "Minimum weekday coverage"],
+                ["minHeadcountSunday", "Minimum Sunday coverage"],
+                ["minHeadcountHoliday", "Minimum holiday coverage"],
+              ] as const).map(([field, label]) => (
+                <label key={field} className="block font-semibold text-slate-700">{label}
+                  <input type="number" min={0} required className={`${fieldClass} mt-1`} value={formData[field] ?? 0} onChange={(event) => setField(field, Number(event.target.value))} />
+                </label>
+              ))}
+            </>
+          )}
+          {activeTab === "brand_processes" && (
+            <label className="flex items-center gap-2 font-semibold text-slate-700">
+              <input type="checkbox" checked={formData.active !== false} onChange={(event) => setField("active", event.target.checked)} />
+              Active
+            </label>
+          )}
+          {activeTab === "assignments" && (
+            <>
+              <label className="block font-semibold text-slate-700">Employee
+                <select required className={`${fieldClass} mt-1`} value={formData.employeeId || ""} onChange={(event) => setField("employeeId", event.target.value)}>
+                  <option value="">Select employee</option>
+                  {employees.map((employee: any) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+                </select>
+              </label>
+              <label className="block font-semibold text-slate-700">Brand / process / task
+                <select required className={`${fieldClass} mt-1`} value={formData.brandProcessId || ""} onChange={(event) => setField("brandProcessId", event.target.value)}>
+                  <option value="">Select brand process</option>
+                  {brandProcesses.map((item: any) => <option key={item.id} value={item.id}>{item.brand_name} / {item.process_code}</option>)}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block font-semibold text-slate-700">Start date
+                  <input type="date" required className={`${fieldClass} mt-1`} value={formData.startDate || ""} onChange={(event) => setField("startDate", event.target.value)} />
+                </label>
+                <label className="block font-semibold text-slate-700">End date (optional)
+                  <input type="date" className={`${fieldClass} mt-1`} value={formData.endDate || ""} onChange={(event) => setField("endDate", event.target.value)} />
+                </label>
+              </div>
+              <label className="block font-semibold text-slate-700">Priority
+                <input type="number" min={1} required className={`${fieldClass} mt-1`} value={formData.priority ?? 1} onChange={(event) => setField("priority", Number(event.target.value))} />
+              </label>
+              <label className="flex items-center gap-2 font-semibold text-slate-700">
+                <input type="checkbox" checked={Boolean(formData.isExclusive)} onChange={(event) => setField("isExclusive", event.target.checked)} />
+                Exclusive assignment
+              </label>
+              <label className="flex items-center gap-2 font-semibold text-slate-700">
+                <input type="checkbox" checked={formData.active !== false} onChange={(event) => setField("active", event.target.checked)} />
+                Active
+              </label>
+            </>
+          )}
+          {activeTab === "weekly_offs" && (
+            <>
+              <label className="block font-semibold text-slate-700">Employee
+                <select required className={`${fieldClass} mt-1`} value={formData.employeeId || ""} onChange={(event) => setField("employeeId", event.target.value)}>
+                  <option value="">Select employee</option>
+                  {employees.map((employee: any) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+                </select>
+              </label>
+              <label className="block font-semibold text-slate-700">Weekly off day
+                <select className={`${fieldClass} mt-1`} value={formData.weekday ?? 0} onChange={(event) => setField("weekday", Number(event.target.value))}>
+                  {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((day, index) => <option key={day} value={index}>{day}</option>)}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block font-semibold text-slate-700">Effective from
+                  <input type="date" required className={`${fieldClass} mt-1`} value={formData.effectiveFrom || ""} onChange={(event) => setField("effectiveFrom", event.target.value)} />
+                </label>
+                <label className="block font-semibold text-slate-700">Effective to (optional)
+                  <input type="date" className={`${fieldClass} mt-1`} value={formData.effectiveTo || ""} onChange={(event) => setField("effectiveTo", event.target.value)} />
+                </label>
+              </div>
+            </>
+          )}
+          {activeTab === "holidays" && (
+            <label className="block font-semibold text-slate-700">Holiday date
+              <input type="date" required className={`${fieldClass} mt-1`} value={formData.date || ""} onChange={(event) => setField("date", event.target.value)} />
+            </label>
+          )}
+          {["employees", "brands"].includes(activeTab) && (
+            <label className="flex items-center gap-2 font-semibold text-slate-700">
+              <input type="checkbox" checked={formData.active !== false} onChange={(event) => setField("active", event.target.checked)} />
+              Active
+            </label>
+          )}
           <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-100">
             <Button
               type="button"
               variant="secondary"
               size="sm"
-              onClick={() => setIsAddModalOpen(false)}
+              onClick={() => {
+                setIsAddModalOpen(false);
+                setEditingId(null);
+              }}
             >
               Cancel
             </Button>
             <Button type="submit" variant="primary" size="sm" loading={submitting}>
-              Save Record
+              {editingId ? "Save Changes" : "Create Record"}
             </Button>
           </div>
         </form>
@@ -371,9 +586,9 @@ export default function MasterDataPage() {
         isOpen={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
         onConfirm={confirmDelete}
-        title="Delete Master Record"
-        message={`Are you sure you want to delete "${deleteTarget?.name}"? Any linked shifts or references may be unassigned or affected.`}
-        confirmText="Confirm Delete"
+        title="Deactivate or Delete Record"
+        message={`Confirm the change for "${deleteTarget?.name}". Employees, brands, rules, and assignments are deactivated to preserve history. Pods and processes can only be deleted when nothing references them.`}
+        confirmText="Confirm"
         variant="danger"
         loading={deleting}
       />

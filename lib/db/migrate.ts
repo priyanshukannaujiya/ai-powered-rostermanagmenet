@@ -81,7 +81,32 @@ async function runMigrations() {
       END $$;
     `;
 
+    await sql`
+      DO $$ BEGIN
+        CREATE TYPE import_status AS ENUM ('previewed', 'committed', 'failed');
+      EXCEPTION
+        WHEN duplicate_object THEN null;
+      END $$;
+    `;
+
     // 2. Tables
+    await sql`
+      CREATE TABLE IF NOT EXISTS imports (
+        id text PRIMARY KEY,
+        filename text NOT NULL,
+        uploaded_by text,
+        uploaded_at timestamp DEFAULT now() NOT NULL,
+        status import_status DEFAULT 'previewed' NOT NULL,
+        row_counts jsonb,
+        error_summary jsonb,
+        target_month text,
+        created_at timestamp DEFAULT now() NOT NULL,
+        updated_at timestamp DEFAULT now() NOT NULL
+      );
+    `;
+
+    await sql`ALTER TABLE imports ADD COLUMN IF NOT EXISTS target_month text;`;
+
     await sql`
       CREATE TABLE IF NOT EXISTS pods (
         id text PRIMARY KEY,
@@ -103,6 +128,7 @@ async function runMigrations() {
         updated_at timestamp DEFAULT now() NOT NULL
       );
     `;
+    await sql`ALTER TABLE employees ADD COLUMN IF NOT EXISTS import_id text REFERENCES imports(id);`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS users (
@@ -120,11 +146,16 @@ async function runMigrations() {
       CREATE TABLE IF NOT EXISTS brands (
         id text PRIMARY KEY,
         name text NOT NULL,
+        code text UNIQUE,
+        category text,
         active boolean DEFAULT true NOT NULL,
         created_at timestamp DEFAULT now() NOT NULL,
         updated_at timestamp DEFAULT now() NOT NULL
       );
     `;
+    await sql`ALTER TABLE brands ADD COLUMN IF NOT EXISTS code text;`;
+    await sql`ALTER TABLE brands ADD COLUMN IF NOT EXISTS category text;`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_brands_code ON brands(code);`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS processes (
@@ -146,11 +177,15 @@ async function runMigrations() {
         min_headcount_sunday integer DEFAULT 0 NOT NULL,
         min_headcount_holiday integer DEFAULT 0 NOT NULL,
         custom_schedule_config jsonb,
+        import_id text REFERENCES imports(id),
+        active boolean DEFAULT true NOT NULL,
         created_at timestamp DEFAULT now() NOT NULL,
         updated_at timestamp DEFAULT now() NOT NULL,
         CONSTRAINT brand_process_unique UNIQUE (brand_id, process_id)
       );
     `;
+    await sql`ALTER TABLE brand_processes ADD COLUMN IF NOT EXISTS import_id text REFERENCES imports(id);`;
+    await sql`ALTER TABLE brand_processes ADD COLUMN IF NOT EXISTS active boolean DEFAULT true NOT NULL;`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS assignments (
@@ -161,10 +196,14 @@ async function runMigrations() {
         end_date date,
         priority integer DEFAULT 1 NOT NULL,
         is_exclusive boolean DEFAULT false NOT NULL,
+        import_id text REFERENCES imports(id),
+        active boolean DEFAULT true NOT NULL,
         created_at timestamp DEFAULT now() NOT NULL,
         updated_at timestamp DEFAULT now() NOT NULL
       );
     `;
+    await sql`ALTER TABLE assignments ADD COLUMN IF NOT EXISTS import_id text REFERENCES imports(id);`;
+    await sql`ALTER TABLE assignments ADD COLUMN IF NOT EXISTS active boolean DEFAULT true NOT NULL;`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS weekly_offs (
@@ -227,6 +266,23 @@ async function runMigrations() {
         updated_at timestamp DEFAULT now() NOT NULL
       );
     `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS roster_month_rules (
+        id text PRIMARY KEY,
+        month text NOT NULL,
+        brand_process_id text NOT NULL REFERENCES brand_processes(id) ON DELETE CASCADE,
+        operating_calendar operating_calendar NOT NULL,
+        min_headcount_weekday integer NOT NULL,
+        min_headcount_sunday integer NOT NULL,
+        min_headcount_holiday integer NOT NULL,
+        created_at timestamp DEFAULT now() NOT NULL,
+        updated_at timestamp DEFAULT now() NOT NULL,
+        CONSTRAINT roster_month_rules_month_bp_unique UNIQUE (month, brand_process_id)
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_imports_uploaded_at ON imports(uploaded_at);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_roster_month_rules_month ON roster_month_rules(month);`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS roster_days (

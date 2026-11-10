@@ -168,6 +168,23 @@ export default function ManagerDashboard() {
           </div>
         </div>
 
+        {totalEmployees === 0 && totalPods === 0 && totalBrands === 0 && (
+          <Card className="border-indigo-200 bg-indigo-50/40">
+            <CardContent className="flex flex-col items-start justify-between gap-4 p-6 sm:flex-row sm:items-center">
+              <div>
+                <h2 className="font-bold text-slate-900">Your roster workspace is ready for real data</h2>
+                <p className="mt-1 max-w-2xl text-xs text-slate-600">
+                  Import a file for a specific month, or add employees, pods, brands, tasks, and assignments one record at a time. No sample records are created automatically.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link href="/manager/import"><Button size="sm">Import new data</Button></Link>
+                <Link href="/manager/master"><Button size="sm" variant="secondary">Manage data</Button></Link>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-2.5">
           <Button

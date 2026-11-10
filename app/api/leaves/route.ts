@@ -4,15 +4,25 @@ import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { z } from "zod";
 import { formatDateOnly } from "@/lib/date-utils";
+import { createEmployeeNotification } from "@/lib/notifications/create";
 
 export const dynamic = "force-dynamic";
 
+function isValidDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 const createLeaveSchema = z.object({
   employeeId: z.string().optional(),
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  startDate: z.string().refine(isValidDate, "Start date must be a valid YYYY-MM-DD date."),
+  endDate: z.string().refine(isValidDate, "End date must be a valid YYYY-MM-DD date."),
   type: z.enum(["planned", "sick", "other"]),
   reason: z.string().optional(),
+}).refine((value) => value.startDate <= value.endDate, {
+  message: "End date cannot be before start date.",
+  path: ["endDate"],
 });
 
 // GET /api/leaves - List leaves with role scoping
@@ -95,6 +105,12 @@ export async function POST(req: NextRequest) {
     if (!targetEmployeeId) {
       return NextResponse.json({ error: "No associated employee account found" }, { status: 400 });
     }
+    const employeeRows = await sql`
+      SELECT id, name FROM employees WHERE id = ${targetEmployeeId} AND active = true LIMIT 1;
+    `;
+    if (!employeeRows.length) {
+      return NextResponse.json({ error: "The selected employee is not active or does not exist." }, { status: 404 });
+    }
 
     const leaveId = `leave-${Date.now()}`;
     await sql`
@@ -102,14 +118,30 @@ export async function POST(req: NextRequest) {
       VALUES (${leaveId}, ${targetEmployeeId}, ${startDate}, ${endDate}, ${type}, ${reason || null}, 'pending', now(), now());
     `;
 
+    let notificationWarning: string | undefined;
+    try {
+      await createEmployeeNotification(sql, {
+        employeeId: targetEmployeeId,
+        title: "Leave request submitted",
+        message: `Your ${type} leave request for ${startDate} to ${endDate} is awaiting review.`,
+        type: "leave_request_submitted",
+        date: startDate,
+        metadata: { leaveId, status: "pending" },
+        notifyPodLead: true,
+      });
+    } catch (notificationError) {
+      console.error("Leave request saved but notification delivery failed:", notificationError);
+      notificationWarning = "The leave request was saved, but its notification could not be delivered.";
+    }
+
     return NextResponse.json({
       success: true,
       leaveId,
       message: "Leave request submitted successfully. Pending review.",
+      notificationWarning,
     });
   } catch (error: any) {
     console.error("Create leave error:", error);
     return NextResponse.json({ error: error.message || "Failed to submit leave" }, { status: 500 });
   }
 }
-

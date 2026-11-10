@@ -92,7 +92,7 @@ export default function EmployeePortalPage() {
         body: JSON.stringify({ action: "mark_read", notificationId: notifId }),
       });
       mutateNotifs();
-      showToast({ type: "success", title: "Acknowledged", message: "Shift appointment notification marked as read." });
+      showToast({ type: "success", title: "Acknowledged", message: "Notification marked as read." });
     } catch (err: any) {
       showToast({ type: "error", title: "Error", message: err.message });
     }
@@ -187,12 +187,13 @@ export default function EmployeePortalPage() {
       const json = await res.json();
       if (res.ok) {
         showToast({
-          type: "success",
+          type: json.notificationWarning ? "warning" : "success",
           title: "Leave Request Submitted",
-          message: "Your leave request has been submitted to your pod lead for review.",
+          message: json.notificationWarning || "Your leave request has been submitted to your pod lead for review.",
         });
         setReason("");
         mutateLeaves();
+        mutateNotifs();
       } else {
         showToast({
           type: "error",
@@ -266,7 +267,7 @@ export default function EmployeePortalPage() {
                   onClick={() => handleAcknowledgeNotification(n.id)}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all self-end sm:self-auto shrink-0 cursor-pointer"
                 >
-                  Acknowledge Shift
+                  Acknowledge
                 </button>
               )}
             </div>

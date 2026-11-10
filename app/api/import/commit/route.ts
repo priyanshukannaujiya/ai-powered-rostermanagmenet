@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-helpers";
-import { neon } from "@neondatabase/serverless";
 import bcrypt from "bcryptjs";
 import "@/lib/db/dns-patch";
+import { beginTransaction, TransactionalSql } from "@/lib/db/transaction";
 import { parseImportFileBuffer } from "@/lib/import/parse";
 import { validateWorkbook } from "@/lib/import/validate";
 import { generateRoster } from "@/lib/scheduler/assign";
@@ -16,6 +16,7 @@ import {
   CompOffItem,
 } from "@/lib/scheduler/types";
 import { formatDateOnly } from "@/lib/date-utils";
+import { intersectMonthRange, isValidRosterMonth } from "@/lib/import/month";
 
 export const dynamic = "force-dynamic";
 
@@ -48,13 +49,21 @@ export async function POST(req: NextRequest) {
   const { user, errorResponse } = await requireAuth(["manager"]);
   if (errorResponse) return errorResponse;
 
+  let transaction: TransactionalSql | undefined;
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const selectedMonth = String(formData.get("targetMonth") || "");
 
     if (!file) {
       return NextResponse.json(
         { ok: false, error: "No CSV or Excel file provided" },
+        { status: 400 }
+      );
+    }
+    if (!isValidRosterMonth(selectedMonth)) {
+      return NextResponse.json(
+        { ok: false, error: "Select a valid roster month before committing the import." },
         { status: 400 }
       );
     }
@@ -72,7 +81,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const validation = validateWorkbook(parseResult.data);
+    const data = { ...parseResult.data, target_month: selectedMonth };
+    const validation = validateWorkbook(data, { requireInitialPasswords: isCsvImport, targetMonth: selectedMonth });
     if (!validation.ok) {
       return NextResponse.json(
         { ok: false, errors: validation.errors, warnings: validation.warnings },
@@ -80,16 +90,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const data = parseResult.data;
-    const targetMonth = data.target_month || new Date().toISOString().slice(0, 7);
+    const targetMonth = selectedMonth;
     const { start: monthStart, end: monthEnd } = getMonthRange(targetMonth);
-    const sql = neon(process.env.DATABASE_URL!);
+    if (!process.env.DATABASE_URL) {
+      throw new Error("DATABASE_URL is not configured.");
+    }
+    const sql = transaction = await beginTransaction(process.env.DATABASE_URL);
     const importId = `imp-${Date.now()}`;
 
     // 2. Transactional Upsert Execution
     // Record the import
     await sql`
-      INSERT INTO imports (id, filename, uploaded_by, uploaded_at, status, row_counts, error_summary, created_at, updated_at)
+      INSERT INTO imports (id, filename, uploaded_by, uploaded_at, status, row_counts, error_summary, target_month, created_at, updated_at)
       VALUES (
         ${importId},
         ${file.name},
@@ -98,6 +110,7 @@ export async function POST(req: NextRequest) {
         'previewed',
         ${JSON.stringify(validation.rowCounts)}::jsonb,
         ${JSON.stringify({ warnings: validation.warnings })}::jsonb,
+        ${targetMonth},
         now(),
         now()
       );
@@ -167,7 +180,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 2d. Upsert Employees
-    const uploadedEmpIds = new Set(data.employees.map((e) => e.employee_id));
     for (const emp of data.employees) {
       await sql`
         INSERT INTO employees (id, name, email, pod_id, active, import_id, created_at, updated_at)
@@ -183,29 +195,28 @@ export async function POST(req: NextRequest) {
 
       // CSV weekly offs apply only to the selected month; workbook imports retain legacy replacement behavior.
       const weekdayNum = WEEKDAY_MAP[emp.weekly_off_day] ?? 0;
-      if (isCsvImport) {
-        const overlappingRules = await sql`
+      const overlappingRules = await sql`
           SELECT id, weekday, effective_from, effective_to
           FROM weekly_offs
           WHERE employee_id = ${emp.employee_id}
             AND effective_from <= ${monthEnd}
             AND (effective_to IS NULL OR effective_to >= ${monthStart});
-        `;
+      `;
 
-        for (const rule of overlappingRules) {
-          const ruleStart = formatDateOnly(rule.effective_from);
-          const ruleEnd = rule.effective_to ? formatDateOnly(rule.effective_to) : null;
-          const hasEarlierRange = ruleStart < monthStart;
-          const hasLaterRange = !ruleEnd || ruleEnd > monthEnd;
+      for (const rule of overlappingRules) {
+        const ruleStart = formatDateOnly(rule.effective_from);
+        const ruleEnd = rule.effective_to ? formatDateOnly(rule.effective_to) : null;
+        const hasEarlierRange = ruleStart < monthStart;
+        const hasLaterRange = !ruleEnd || ruleEnd > monthEnd;
 
-          if (hasEarlierRange) {
-            await sql`
+        if (hasEarlierRange) {
+          await sql`
               UPDATE weekly_offs
               SET effective_to = ${addDays(monthStart, -1)}, updated_at = now()
               WHERE id = ${rule.id};
-            `;
-            if (hasLaterRange) {
-              await sql`
+          `;
+          if (hasLaterRange) {
+            await sql`
                 INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, effective_to, created_at, updated_at)
                 VALUES (
                   ${`wo-${emp.employee_id}-${addDays(monthEnd, 1)}-${importId}`},
@@ -216,23 +227,23 @@ export async function POST(req: NextRequest) {
                   now(),
                   now()
                 );
-              `;
-            }
-          } else if (hasLaterRange) {
-            await sql`
+            `;
+          }
+        } else if (hasLaterRange) {
+          await sql`
               UPDATE weekly_offs
               SET effective_from = ${addDays(monthEnd, 1)}, updated_at = now()
               WHERE id = ${rule.id};
-            `;
-          } else {
-            await sql`DELETE FROM weekly_offs WHERE id = ${rule.id};`;
-          }
+          `;
+        } else {
+          await sql`DELETE FROM weekly_offs WHERE id = ${rule.id};`;
         }
+      }
 
-        await sql`
+      await sql`
           INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, effective_to, created_at, updated_at)
           VALUES (
-            ${`wo-${emp.employee_id}-${monthStart}-${importId}`},
+            ${`wo-${emp.employee_id}-${monthStart}`},
             ${emp.employee_id},
             ${weekdayNum},
             ${monthStart},
@@ -240,14 +251,7 @@ export async function POST(req: NextRequest) {
             now(),
             now()
           );
-        `;
-      } else {
-        await sql`DELETE FROM weekly_offs WHERE employee_id = ${emp.employee_id};`;
-        await sql`
-          INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, created_at, updated_at)
-          VALUES (${`wo-${emp.employee_id}`}, ${emp.employee_id}, ${weekdayNum}, '2026-01-01', now(), now());
-        `;
-      }
+      `;
     }
 
     for (const pod of data.pods) {
@@ -302,28 +306,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Soft delete employees absent in this upload
-    const empIdArray = Array.from(uploadedEmpIds);
-    if (!isCsvImport && empIdArray.length > 0) {
-      await sql`
-        UPDATE employees 
-        SET active = false, updated_at = now()
-        WHERE NOT (id = ANY(${empIdArray}));
-      `;
-    }
-
     // 2e. Upsert Brand Processes (Schedules)
     const bpMap = new Map<string, string>(); // "brand_code:process_code" -> bp_id
-    const uploadedBpKeys = new Set<string>();
-
     for (const sch of data.schedules) {
       const bId = brandMap.get(sch.brand_code);
       const pId = processMap.get(sch.process_code);
       if (!bId || !pId) continue;
 
       const bpKey = `${sch.brand_code}:${sch.process_code}`;
-      uploadedBpKeys.add(bpKey);
-
       const existingBp = await sql`
         SELECT id FROM brand_processes WHERE brand_id = ${bId} AND process_id = ${pId} LIMIT 1;
       `;
@@ -331,14 +321,8 @@ export async function POST(req: NextRequest) {
       if (existingBp.length > 0) {
         bpId = existingBp[0].id;
         await sql`
-          UPDATE brand_processes SET
-            operating_calendar = ${sch.operating_calendar},
-            min_headcount_weekday = ${sch.weekday_headcount},
-            min_headcount_sunday = ${sch.sunday_headcount},
-            min_headcount_holiday = ${sch.holiday_headcount},
-            active = true,
-            import_id = ${importId},
-            updated_at = now()
+          UPDATE brand_processes
+          SET active = true, updated_at = now()
           WHERE id = ${bpId};
         `;
       } else {
@@ -352,34 +336,92 @@ export async function POST(req: NextRequest) {
             ${sch.sunday_headcount}, ${sch.holiday_headcount}, true, ${importId}, now(), now()
           )
           ON CONFLICT (brand_id, process_id) DO UPDATE SET
-            operating_calendar = EXCLUDED.operating_calendar,
-            min_headcount_weekday = EXCLUDED.min_headcount_weekday,
-            min_headcount_sunday = EXCLUDED.min_headcount_sunday,
-            min_headcount_holiday = EXCLUDED.min_headcount_holiday,
             active = true,
-            import_id = ${importId},
             updated_at = now();
         `;
       }
       bpMap.set(bpKey, bpId);
+
+      await sql`
+        INSERT INTO roster_month_rules (
+          id, month, brand_process_id, operating_calendar,
+          min_headcount_weekday, min_headcount_sunday, min_headcount_holiday,
+          created_at, updated_at
+        ) VALUES (
+          ${`rmp-${targetMonth}-${bpId}`}, ${targetMonth}, ${bpId}, ${sch.operating_calendar},
+          ${sch.weekday_headcount}, ${sch.sunday_headcount}, ${sch.holiday_headcount}, now(), now()
+        )
+        ON CONFLICT (month, brand_process_id) DO UPDATE SET
+          operating_calendar = EXCLUDED.operating_calendar,
+          min_headcount_weekday = EXCLUDED.min_headcount_weekday,
+          min_headcount_sunday = EXCLUDED.min_headcount_sunday,
+          min_headcount_holiday = EXCLUDED.min_headcount_holiday,
+          updated_at = now();
+      `;
     }
 
     // 2f. Upsert Assignments
-    // Clear previous assignments linked to other imports or refresh active assignments
-    if (!isCsvImport) {
-      await sql`UPDATE assignments SET active = false WHERE active = true;`;
-    }
-
     for (const asg of data.assignments) {
       const bpId = bpMap.get(`${asg.brand_code}:${asg.process_code}`);
       if (!bpId) continue;
 
-      const asgId = `asg-${asg.employee_id}-${asg.brand_code}-${asg.process_code}-${asg.valid_from}`;
+      const assignmentRange = intersectMonthRange(asg.valid_from, asg.valid_to, targetMonth);
+      if (!assignmentRange) continue;
+
+      const overlappingAssignments = await sql`
+        SELECT id, start_date, end_date, priority, is_exclusive, import_id
+        FROM assignments
+        WHERE employee_id = ${asg.employee_id}
+          AND brand_process_id = ${bpId}
+          AND active = true
+          AND start_date <= ${monthEnd}
+          AND (end_date IS NULL OR end_date >= ${monthStart});
+      `;
+      for (const existing of overlappingAssignments) {
+        const existingStart = formatDateOnly(existing.start_date);
+        const existingEnd = existing.end_date ? formatDateOnly(existing.end_date) : null;
+        const hasEarlierRange = existingStart < monthStart;
+        const hasLaterRange = !existingEnd || existingEnd > monthEnd;
+
+        if (hasEarlierRange) {
+          await sql`
+            UPDATE assignments
+            SET end_date = ${addDays(monthStart, -1)}, updated_at = now()
+            WHERE id = ${existing.id};
+          `;
+          if (hasLaterRange) {
+            await sql`
+              INSERT INTO assignments (
+                id, employee_id, brand_process_id, start_date, end_date, priority,
+                is_exclusive, active, import_id, created_at, updated_at
+              ) VALUES (
+                ${`${existing.id}-after-${targetMonth}`}, ${asg.employee_id}, ${bpId},
+                ${addDays(monthEnd, 1)}, ${existingEnd}, ${existing.priority},
+                ${existing.is_exclusive}, true, ${existing.import_id}, now(), now()
+              )
+              ON CONFLICT (id) DO NOTHING;
+            `;
+          }
+        } else if (hasLaterRange) {
+          await sql`
+            UPDATE assignments
+            SET start_date = ${addDays(monthEnd, 1)}, updated_at = now()
+            WHERE id = ${existing.id};
+          `;
+        } else {
+          await sql`
+            UPDATE assignments SET active = false, updated_at = now()
+            WHERE id = ${existing.id};
+          `;
+        }
+      }
+
+      const asgId = `asg-${asg.employee_id}-${asg.brand_code}-${asg.process_code}-${targetMonth}`;
       await sql`
         INSERT INTO assignments (
           id, employee_id, brand_process_id, start_date, end_date, priority, is_exclusive, active, import_id, created_at, updated_at
         ) VALUES (
-          ${asgId}, ${asg.employee_id}, ${bpId}, ${asg.valid_from}, ${asg.valid_to || null},
+          ${asgId}, ${asg.employee_id}, ${bpId}, ${assignmentRange.start}, ${assignmentRange.end},
           ${asg.priority}, ${asg.is_exclusive}, true, ${importId}, now(), now()
         )
         ON CONFLICT (id) DO UPDATE SET
@@ -396,12 +438,14 @@ export async function POST(req: NextRequest) {
 
     // 2g. Upsert Leaves
     for (const lv of data.leaves) {
-      const leaveId = `leave-${lv.employee_id}-${lv.date_from}-${lv.date_to}`;
+      const leaveRange = intersectMonthRange(lv.date_from, lv.date_to, targetMonth);
+      if (!leaveRange) continue;
+      const leaveId = `leave-${lv.employee_id}-${targetMonth}-${leaveRange.start}-${leaveRange.end}`;
       await sql`
         INSERT INTO leaves (
           id, employee_id, start_date, end_date, type, status, created_at, updated_at
         ) VALUES (
-          ${leaveId}, ${lv.employee_id}, ${lv.date_from}, ${lv.date_to}, ${lv.type === "comp_off" ? "other" : "planned"},
+          ${leaveId}, ${lv.employee_id}, ${leaveRange.start}, ${leaveRange.end}, ${lv.type === "comp_off" ? "other" : "planned"},
           ${lv.status}, now(), now()
         )
         ON CONFLICT (id) DO UPDATE SET
@@ -442,11 +486,17 @@ export async function POST(req: NextRequest) {
     const [empRows, bpRows, asgnRows, woRows, holRows, leaveRows] = await Promise.all([
       sql`SELECT id, name, email, pod_id, active FROM employees WHERE active = true;`,
       sql`
-        SELECT bp.*, b.name as brand_name, p.code as process_code
+        SELECT bp.*, b.name as brand_name, p.code as process_code,
+          COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
+          COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as month_min_headcount_weekday,
+          COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as month_min_headcount_sunday,
+          COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as month_min_headcount_holiday
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
         JOIN processes p ON bp.process_id = p.id
-        WHERE bp.active = true;
+        LEFT JOIN roster_month_rules mr
+          ON mr.brand_process_id = bp.id AND mr.month = ${targetMonth}
+        WHERE bp.active = true AND b.active = true;
       `,
       sql`SELECT * FROM assignments WHERE active = true;`,
       sql`SELECT * FROM weekly_offs;`,
@@ -468,10 +518,10 @@ export async function POST(req: NextRequest) {
       brandName: b.brand_name,
       processId: b.process_id,
       processCode: b.process_code,
-      operatingCalendar: b.operating_calendar,
-      minHeadcountWeekday: b.min_headcount_weekday,
-      minHeadcountSunday: b.min_headcount_sunday,
-      minHeadcountHoliday: b.min_headcount_holiday,
+      operatingCalendar: b.month_operating_calendar,
+      minHeadcountWeekday: b.month_min_headcount_weekday,
+      minHeadcountSunday: b.month_min_headcount_sunday,
+      minHeadcountHoliday: b.month_min_headcount_holiday,
     }));
 
     const solverAsgn: AssignmentRule[] = asgnRows.map((a: any) => ({
@@ -553,6 +603,7 @@ export async function POST(req: NextRequest) {
       SET status = 'committed', updated_at = now()
       WHERE id = ${importId};
     `;
+    await sql.commit();
 
     return NextResponse.json({
       ok: true,
@@ -564,10 +615,19 @@ export async function POST(req: NextRequest) {
       rowCounts: validation.rowCounts,
     });
   } catch (error: any) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Import rollback failed:", rollbackError);
+      }
+    }
     console.error("Commit error:", error);
     return NextResponse.json(
       { ok: false, error: "Failed to commit import", details: error.message },
       { status: 500 }
     );
+  } finally {
+    if (transaction) await transaction.close();
   }
 }

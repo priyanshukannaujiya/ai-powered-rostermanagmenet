@@ -9,6 +9,12 @@ import {
 } from "./types";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const isValidDate = (value: string) => {
+  if (!DATE_REGEX.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
+const DateSchema = z.string().refine(isValidDate, "Date must be a real calendar date in YYYY-MM-DD format");
 
 // Row schemas
 const PodRowSchema = z.object({
@@ -58,34 +64,39 @@ const AssignmentRowSchema = z.object({
   employee_id: z.string().min(1, "employee_id cannot be empty"),
   brand_code: z.string().min(1, "brand_code cannot be empty"),
   process_code: z.string().min(1, "process_code cannot be empty"),
-  valid_from: z.string().regex(DATE_REGEX, "valid_from must be in YYYY-MM-DD format"),
-  valid_to: z
-    .string()
-    .regex(DATE_REGEX, "valid_to must be in YYYY-MM-DD format")
-    .nullable()
-    .optional(),
+  valid_from: DateSchema,
+  valid_to: DateSchema.nullable().optional(),
   priority: z.number().int().min(1, "priority must be >= 1"),
   is_exclusive: z.boolean(),
+}).refine((assignment) => !assignment.valid_to || assignment.valid_to >= assignment.valid_from, {
+  path: ["valid_to"],
+  message: "valid_to cannot be before valid_from",
 });
 
 const LeaveRowSchema = z.object({
   employee_id: z.string().min(1, "employee_id cannot be empty"),
-  date_from: z.string().regex(DATE_REGEX, "date_from must be in YYYY-MM-DD format"),
-  date_to: z.string().regex(DATE_REGEX, "date_to must be in YYYY-MM-DD format"),
+  date_from: DateSchema,
+  date_to: DateSchema,
   type: z.enum(["leave", "comp_off"], {
     errorMap: () => ({ message: "type must be leave or comp_off" }),
   }),
   status: z.enum(["approved", "pending"], {
     errorMap: () => ({ message: "status must be approved or pending" }),
   }),
+}).refine((leave) => leave.date_to >= leave.date_from, {
+  path: ["date_to"],
+  message: "date_to cannot be before date_from",
 });
 
 const HolidayRowSchema = z.object({
-  date: z.string().regex(DATE_REGEX, "date must be in YYYY-MM-DD format"),
+  date: DateSchema,
   name: z.string().min(1, "holiday name cannot be empty"),
 });
 
-export function validateWorkbook(data: ParsedWorkbook): {
+export function validateWorkbook(
+  data: ParsedWorkbook,
+  options: { requireInitialPasswords?: boolean; targetMonth?: string } = {}
+): {
   ok: boolean;
   errors: ValidationError[];
   warnings: ValidationWarning[];
@@ -136,7 +147,60 @@ export function validateWorkbook(data: ParsedWorkbook): {
   validateRows("Leaves", data.leaves, LeaveRowSchema);
   validateRows("Holidays", data.holidays, HolidayRowSchema);
 
-  if (data.target_month) {
+  const targetMonth = options.targetMonth;
+  if (targetMonth) {
+    data.holidays.forEach((holiday, index) => {
+      if (!holiday.date.startsWith(`${targetMonth}-`)) {
+        errors.push({
+          sheet: "Holidays",
+          row: index + 2,
+          field: "date",
+          message: `Holiday date must be within the selected roster month ${targetMonth}.`,
+        });
+      }
+    });
+    data.leaves.forEach((leave, index) => {
+      const monthStart = `${targetMonth}-01`;
+      const [year, month] = targetMonth.split("-").map(Number);
+      const monthEnd = `${targetMonth}-${String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, "0")}`;
+      if (leave.date_to < monthStart || leave.date_from > monthEnd) {
+        errors.push({
+          sheet: "Leaves",
+          row: index + 2,
+          field: "date_from/date_to",
+          message: `Leave dates must overlap the selected roster month ${targetMonth}.`,
+        });
+      }
+    });
+    data.assignments.forEach((assignment, index) => {
+      const monthStart = `${targetMonth}-01`;
+      const [year, month] = targetMonth.split("-").map(Number);
+      const monthEnd = `${targetMonth}-${String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, "0")}`;
+      if ((assignment.valid_to && assignment.valid_to < monthStart) || assignment.valid_from > monthEnd) {
+        errors.push({
+          sheet: "Assignments",
+          row: index + 2,
+          field: "valid_from/valid_to",
+          message: `Assignment dates must overlap the selected roster month ${targetMonth}.`,
+        });
+      }
+    });
+    const assignmentKeys = new Set<string>();
+    data.assignments.forEach((assignment, index) => {
+      const key = `${assignment.employee_id}:${assignment.brand_code}:${assignment.process_code}`;
+      if (assignmentKeys.has(key)) {
+        errors.push({
+          sheet: "Assignments",
+          row: index + 2,
+          field: "employee_id/brand_code/process_code",
+          message: "Only one assignment for an employee and brand/process may be imported per month.",
+        });
+      }
+      assignmentKeys.add(key);
+    });
+  }
+
+  if (options.requireInitialPasswords) {
     data.employees.forEach((employee, idx) => {
       if (!employee.initial_password || employee.initial_password.length < 12) {
         errors.push({

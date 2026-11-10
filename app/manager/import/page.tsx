@@ -55,6 +55,7 @@ export default function ImportPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
+  const [targetMonth, setTargetMonth] = useState("");
   const [previewing, setPreviewing] = useState(false);
   const [committing, setCommitting] = useState(false);
 
@@ -74,6 +75,7 @@ export default function ImportPage() {
     targetMonth: string;
     conflictsCount: number;
     daysAssigned: number;
+    employeeAccountsProvisioned: boolean;
   } | null>(null);
 
   const handleFileChange = async (selectedFile: File) => {
@@ -85,6 +87,7 @@ export default function ImportPage() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
+      formData.append("targetMonth", targetMonth);
 
       const res = await fetch("/api/import/preview", {
         method: "POST",
@@ -128,6 +131,7 @@ export default function ImportPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("targetMonth", targetMonth);
 
       const res = await fetch("/api/import/commit", {
         method: "POST",
@@ -138,9 +142,9 @@ export default function ImportPage() {
       if (res.ok && json.ok) {
         setCommitResult(json);
         showToast({
-          type: "success",
-          title: "Roster Imported & Generated",
-          message: `Successfully imported data. Solver scheduled ${json.daysAssigned} shifts with ${json.conflictsCount} conflict(s).`,
+          type: json.conflictsCount > 0 ? "warning" : "success",
+          title: json.conflictsCount > 0 ? "Import complete with roster conflicts" : "Import and roster generation complete",
+          message: `Generated ${json.daysAssigned} shifts for ${json.targetMonth} with ${json.conflictsCount} conflict(s). Review conflicts before publishing.`,
         });
         // Dispatch live event to update open tabs/drawers
         window.dispatchEvent(new CustomEvent("roster:refresh"));
@@ -182,7 +186,7 @@ export default function ImportPage() {
                 Roster Data Import
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Upload one CSV to merge pods, employees, brands, process rules, and weekly offs, then regenerate the selected month.
+                Import shared team data and create or update a roster for the month you choose.
               </p>
             </div>
           </div>
@@ -210,16 +214,20 @@ export default function ImportPage() {
 
       {/* Success Banner if committed */}
       {commitResult && (
-        <div className="p-5 bg-emerald-50 border border-emerald-200/90 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down">
+        <div className={`p-5 border rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-slide-down ${commitResult.conflictsCount > 0 ? "bg-amber-50 border-amber-200" : "bg-emerald-50 border-emerald-200/90"}`}>
           <div className="flex items-start gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            {commitResult.conflictsCount > 0
+              ? <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              : <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />}
             <div>
-              <h3 className="font-bold text-sm text-emerald-950">
-                Data Imported & Roster Auto-Generated
+              <h3 className={`font-bold text-sm ${commitResult.conflictsCount > 0 ? "text-amber-950" : "text-emerald-950"}`}>
+                {commitResult.conflictsCount > 0 ? "Data imported; review roster conflicts" : "Data imported and roster generated"}
               </h3>
-              <p className="text-xs text-emerald-700 mt-0.5">
+              <p className={`text-xs mt-0.5 ${commitResult.conflictsCount > 0 ? "text-amber-800" : "text-emerald-700"}`}>
                 Import ID: <code className="font-mono font-bold">{commitResult.importId}</code> •{" "}
                 {commitResult.daysAssigned} shifts assigned with {commitResult.conflictsCount} conflict(s).
+                {!commitResult.employeeAccountsProvisioned && " Employee login accounts were not created because this file has no initial passwords."}
+                {" Review conflicts before publishing."}
               </p>
             </div>
           </div>
@@ -244,18 +252,40 @@ export default function ImportPage() {
           <div>
             <CardTitle>Upload Roster Data</CardTitle>
             <CardDescription>
-                CSV rows describe employee-to-brand/process assignments. Repeat pod, employee, brand, and process details when one employee has multiple assignments. Provide an initial password of at least 12 characters for each employee; passwords are stored as bcrypt hashes. Pod leads are assigned from each pod&apos;s lead employee ID. Leave requests stay in the employee portal and are never imported from CSV.
+              Select a month, then upload a CSV or Excel workbook. Shared employee, pod, brand, process, and assignment records are maintained alongside month-specific roster rules. Existing records omitted from an import are preserved.
             </CardDescription>
           </div>
         </CardHeader>
         <CardContent>
+          <div className="mb-5 max-w-xs">
+            <label htmlFor="roster-month" className="mb-1.5 block text-xs font-semibold text-slate-700">
+              Roster month <span className="text-rose-600">*</span>
+            </label>
+            <input
+              id="roster-month"
+              type="month"
+              required
+              value={targetMonth}
+              onChange={(event) => {
+                setTargetMonth(event.target.value);
+                setFile(null);
+                if (fileInputRef.current) fileInputRef.current.value = "";
+                setPreviewResult(null);
+                setCommitResult(null);
+              }}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <p className="mt-1 text-[11px] text-slate-500">
+              The import will update this month only. Other months&apos; rosters remain unchanged.
+            </p>
+          </div>
           <div
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => targetMonth && fileInputRef.current?.click()}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
               const dropped = e.dataTransfer.files[0];
-              if (dropped) handleFileChange(dropped);
+              if (dropped && targetMonth) handleFileChange(dropped);
             }}
             className="border-2 border-dashed border-slate-300 hover:border-indigo-500 hover:bg-indigo-50/20 transition-all rounded-2xl p-8 sm:p-12 text-center cursor-pointer flex flex-col items-center justify-center gap-3 group"
           >
@@ -264,6 +294,7 @@ export default function ImportPage() {
               type="file"
               accept=".csv,.xlsx,.xls"
               className="hidden"
+              disabled={!targetMonth}
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) handleFileChange(f);
@@ -274,12 +305,12 @@ export default function ImportPage() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-800">
-                {file ? file.name : "Click to browse or drag and drop a CSV or workbook"}
+                {file ? file.name : targetMonth ? "Click to browse or drag and drop a CSV or workbook" : "Choose the roster month to enable file upload"}
               </p>
               <p className="text-xs text-slate-400 mt-1">
                 {file
                   ? `${(file.size / 1024).toFixed(1)} KB • Click to replace file`
-                  : "CSV imports merge matching records and regenerate the month in schedule_month"}
+                  : "CSV and Excel imports preserve records not included in the file"}
               </p>
             </div>
             {previewing && (
@@ -365,15 +396,9 @@ export default function ImportPage() {
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>
-                {previewResult.importMode === "merge"
-                  ? "Database Merge Preview"
-                  : "Workbook Replacement Preview"}
-              </CardTitle>
+              <CardTitle>Database Merge Preview</CardTitle>
               <CardDescription>
-                {previewResult.importMode === "merge"
-                  ? `Only matching or incoming records will be added or updated; omitted records and existing leave requests are preserved. Roster month: ${previewResult.targetMonth || "not specified"}.`
-                  : "Workbook imports replace the imported employee and assignment set. Employees omitted from the workbook may be deactivated; review the removal counts carefully before committing."}
+                Selected roster month: {previewResult.targetMonth}. Shared master records may be added or updated; omitted records and other months&apos; rosters are preserved.
               </CardDescription>
             </div>
             <Button

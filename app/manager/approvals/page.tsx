@@ -11,6 +11,7 @@ import {
   Users,
   Calendar,
   Sparkles,
+  Bell,
   ArrowRight,
   UserCheck,
   History,
@@ -35,6 +36,11 @@ export default function ApprovalsQueuePage() {
     refreshInterval: 20000,
     revalidateOnFocus: true,
   });
+  const { data: notificationData, mutate: mutateNotifications } = useSWR("/api/notifications", fetcher, {
+    refreshInterval: 10000,
+    revalidateOnFocus: true,
+  });
+  const notifications = notificationData?.notifications || [];
 
   // Replan Preview Modal State
   const [selectedLeave, setSelectedLeave] = useState<any>(null);
@@ -51,10 +57,11 @@ export default function ApprovalsQueuePage() {
   React.useEffect(() => {
     const handleRefresh = () => {
       mutate();
+      mutateNotifications();
     };
     window.addEventListener("roster:refresh", handleRefresh);
     return () => window.removeEventListener("roster:refresh", handleRefresh);
-  }, [mutate]);
+  }, [mutate, mutateNotifications]);
 
   const handleOpenPreview = async (leave: any) => {
     setSelectedLeave(leave);
@@ -101,12 +108,14 @@ export default function ApprovalsQueuePage() {
       const json = await res.json();
       if (res.ok) {
         showToast({
-          type: "success",
+          type: json.notificationWarning ? "warning" : "success",
           title: "Leave Request Approved",
-          message: `Approved leave and automatically replanned ${json.diff?.changedDays?.length || 0} future shift(s).`,
+          message: json.notificationWarning || `Approved leave and automatically replanned ${json.diff?.changedDays?.length || 0} future shift(s). The employee was notified.`,
         });
         setSelectedLeave(null);
         mutate();
+        mutateNotifications();
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
       } else {
         showToast({
           type: "error",
@@ -125,13 +134,18 @@ export default function ApprovalsQueuePage() {
     setRejecting(leaveId);
     try {
       const res = await fetch(`/api/leaves/${leaveId}/reject`, { method: "POST" });
+      const json = await res.json();
       if (res.ok) {
         showToast({
-          type: "info",
+          type: json.notificationWarning ? "warning" : "info",
           title: "Leave Rejected",
-          message: "The leave request status was updated to rejected.",
+          message: json.notificationWarning || "The leave request status was updated to rejected and the employee was notified.",
         });
         mutate();
+        mutateNotifications();
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
+      } else {
+        showToast({ type: "error", title: "Rejection Failed", message: json.error || "Could not reject leave." });
       }
     } catch (err: any) {
       showToast({ type: "error", title: "Error", message: err.message });
@@ -185,6 +199,62 @@ export default function ApprovalsQueuePage() {
           </button>
         </div>
       </div>
+
+      {notifications.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bell className="h-4 w-4 text-indigo-600" />
+              Team notifications
+            </CardTitle>
+            <CardDescription>
+              Recent leave and roster updates for your authorized team scope.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y divide-slate-100">
+              {notifications.slice(0, 8).map((notification: any) => (
+                <div key={notification.id} className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-900">{notification.title}</span>
+                      {!notification.read && <Badge variant="warning" size="sm">New</Badge>}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">{notification.message}</p>
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {notification.employee_name} · {new Date(notification.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                  {!notification.read && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          const response = await fetch("/api/notifications", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "mark_read", notificationId: notification.id }),
+                          });
+                          if (!response.ok) {
+                            showToast({ type: "error", title: "Update Failed", message: "Could not mark notification as read." });
+                            return;
+                          }
+                          mutateNotifications();
+                        } catch (error: any) {
+                          showToast({ type: "error", title: "Update Failed", message: error.message || "Could not mark notification as read." });
+                        }
+                      }}
+                    >
+                      Mark read
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Requests List */}
       <Card>

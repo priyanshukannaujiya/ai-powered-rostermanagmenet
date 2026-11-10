@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
+import { randomUUID } from "crypto";
+import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,68 @@ const ALLOWED_ENTITIES = [
 ] as const;
 
 type EntityType = (typeof ALLOWED_ENTITIES)[number];
+
+function validateInput(entity: EntityType, input: unknown): string | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return "A JSON object is required.";
+  }
+  const body = input as Record<string, unknown>;
+  const text = (key: string) => typeof body[key] === "string" && body[key].trim().length > 0;
+  const optionalText = (key: string) => body[key] == null || body[key] === "" || text(key);
+  const integer = (key: string, minimum = 0) =>
+    Number.isInteger(body[key]) && Number(body[key]) >= minimum;
+  const date = (key: string) => {
+    if (typeof body[key] !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body[key] as string)) return false;
+    const parsedDate = new Date(`${body[key]}T00:00:00.000Z`);
+    return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === body[key];
+  };
+
+  switch (entity) {
+    case "employees":
+      if (!text("name") || !text("email") || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(body.email))) {
+        return "Employee name and a valid email address are required.";
+      }
+      if (!optionalText("podId")) return "Select a valid pod or leave it unassigned.";
+      if (typeof body.active !== "boolean") return "Employee active status is required.";
+      if (body.initialPassword && (typeof body.initialPassword !== "string" || body.initialPassword.length < 12)) {
+        return "Initial passwords must be at least 12 characters.";
+      }
+      return null;
+    case "pods":
+      if (!text("name") || !optionalText("leadEmployeeId")) return "Pod name and a valid optional pod lead are required.";
+      return null;
+    case "brands":
+      if (!text("name") || !text("code") || !optionalText("category")) return "Brand name and unique code are required.";
+      if (typeof body.active !== "boolean") return "Brand active status is required.";
+      return null;
+    case "processes":
+      return text("name") && text("code") ? null : "Process name and unique code are required.";
+    case "brand_processes":
+      if (!text("brandId") || !text("processId")) return "Select both a brand and process.";
+      if (!["all_365", "daily_no_holidays", "mon_sat_no_holidays", "custom"].includes(String(body.operatingCalendar))) {
+        return "Select a valid operating calendar.";
+      }
+      if (body.active !== undefined && typeof body.active !== "boolean") return "Rule active status must be a boolean.";
+      if (!integer("minHeadcountWeekday") || !integer("minHeadcountSunday") || !integer("minHeadcountHoliday")) {
+        return "Coverage requirements must be non-negative whole numbers.";
+      }
+      return null;
+    case "assignments":
+      if (!text("employeeId") || !text("brandProcessId") || !date("startDate")) return "Select an employee and brand/process, and provide a valid start date.";
+      if (!optionalText("endDate") || (body.endDate && !date("endDate"))) return "Provide a valid optional end date.";
+      if (body.endDate && String(body.endDate) < String(body.startDate)) return "End date cannot be before start date.";
+      if (!integer("priority", 1) || typeof body.isExclusive !== "boolean") return "Priority must be a positive whole number and exclusivity must be selected.";
+      if (body.active !== undefined && typeof body.active !== "boolean") return "Assignment active status must be a boolean.";
+      return null;
+    case "weekly_offs":
+      if (!text("employeeId") || !integer("weekday") || Number(body.weekday) > 6 || !date("effectiveFrom")) return "Select an employee, weekday (0-6), and valid effective start date.";
+      if (!optionalText("effectiveTo") || (body.effectiveTo && !date("effectiveTo"))) return "Provide a valid optional effective end date.";
+      if (body.effectiveTo && String(body.effectiveTo) < String(body.effectiveFrom)) return "Effective end date cannot be before the start date.";
+      return null;
+    case "holidays":
+      return date("date") && text("name") ? null : "Holiday name and a valid date are required.";
+  }
+}
 
 export async function GET(
   req: NextRequest,
@@ -37,7 +101,8 @@ export async function GET(
     switch (entity) {
       case "employees":
         rows = await sql`
-          SELECT e.*, p.name as pod_name
+          SELECT e.*, p.name as pod_name,
+            EXISTS (SELECT 1 FROM users u WHERE u.employee_id = e.id) AS has_login
           FROM employees e
           LEFT JOIN pods p ON e.pod_id = p.id
           ORDER BY e.name ASC;
@@ -109,60 +174,109 @@ export async function POST(
     return NextResponse.json({ error: "Invalid master data entity" }, { status: 400 });
   }
 
-  const sql = neon(process.env.DATABASE_URL!);
-  const body = await req.json();
-
   try {
-    const id = body.id || `${entity.slice(0, 3)}-${Date.now()}`;
+    const body = await req.json();
+    const validationError = validateInput(entity, body);
+    if (validationError) return NextResponse.json({ error: validationError }, { status: 400 });
+    const sql = neon(process.env.DATABASE_URL!);
+    const id = `${entity.slice(0, 3)}-${randomUUID()}`;
 
     switch (entity) {
       case "employees":
+        {
+          const existingEmployee = await sql`SELECT id FROM employees WHERE LOWER(email) = ${String(body.email).trim().toLowerCase()} LIMIT 1;`;
+          if (existingEmployee.length) return NextResponse.json({ error: "An employee with this email already exists." }, { status: 409 });
+        }
+        if (body.podId) {
+          const pod = await sql`SELECT id FROM pods WHERE id = ${body.podId} LIMIT 1;`;
+          if (!pod.length) return NextResponse.json({ error: "Selected pod does not exist." }, { status: 400 });
+        }
+        if (body.initialPassword) {
+          const normalizedEmail = String(body.email).trim().toLowerCase();
+          const existingUser = await sql`SELECT id FROM users WHERE LOWER(email) = ${normalizedEmail} LIMIT 1;`;
+          if (existingUser.length) return NextResponse.json({ error: "This email already belongs to a login account." }, { status: 409 });
+        }
         await sql`
           INSERT INTO employees (id, name, email, pod_id, active, created_at, updated_at)
-          VALUES (${id}, ${body.name}, ${body.email}, ${body.podId || null}, ${body.active ?? true}, now(), now());
+          VALUES (${id}, ${String(body.name).trim()}, ${String(body.email).trim().toLowerCase()}, ${body.podId || null}, ${body.active}, now(), now());
         `;
+        if (body.initialPassword) {
+          const passwordHash = await bcrypt.hash(String(body.initialPassword), 12);
+          const podLead = body.podId
+            ? await sql`SELECT id FROM pods WHERE id = ${body.podId} AND lead_employee_id = ${id} LIMIT 1;`
+            : [];
+          await sql`
+            INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at)
+            VALUES (${`user-${id}`}, ${String(body.email).trim().toLowerCase()}, ${passwordHash}, ${podLead.length ? "pod_lead" : "employee"}, ${id}, now(), now());
+          `;
+        }
         break;
       case "pods":
+        if (body.leadEmployeeId) {
+          const employee = await sql`SELECT id FROM employees WHERE id = ${body.leadEmployeeId} AND active = true LIMIT 1;`;
+          if (!employee.length) return NextResponse.json({ error: "Selected pod lead does not exist." }, { status: 400 });
+        }
         await sql`
           INSERT INTO pods (id, name, lead_employee_id, created_at, updated_at)
           VALUES (${id}, ${body.name}, ${body.leadEmployeeId || null}, now(), now());
         `;
+        if (body.leadEmployeeId) {
+          await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;
+        }
         break;
       case "brands":
         await sql`
-          INSERT INTO brands (id, name, active, created_at, updated_at)
-          VALUES (${id}, ${body.name}, ${body.active ?? true}, now(), now());
+          INSERT INTO brands (id, name, code, category, active, created_at, updated_at)
+          VALUES (${id}, ${String(body.name).trim()}, ${String(body.code).trim().toUpperCase()}, ${body.category || null}, ${body.active}, now(), now());
         `;
         break;
       case "processes":
         await sql`
           INSERT INTO processes (id, name, code, created_at, updated_at)
-          VALUES (${id}, ${body.name}, ${body.code}, now(), now());
+          VALUES (${id}, ${String(body.name).trim()}, ${String(body.code).trim().toUpperCase()}, now(), now());
         `;
         break;
       case "brand_processes":
+        {
+          const [brand, process] = await Promise.all([
+            sql`SELECT id FROM brands WHERE id = ${body.brandId} AND active = true LIMIT 1;`,
+            sql`SELECT id FROM processes WHERE id = ${body.processId} LIMIT 1;`,
+          ]);
+          if (!brand.length || !process.length) return NextResponse.json({ error: "Selected brand or process does not exist." }, { status: 400 });
+        }
         await sql`
           INSERT INTO brand_processes (
-            id, brand_id, process_id, operating_calendar, min_headcount_weekday, min_headcount_sunday, min_headcount_holiday, created_at, updated_at
+            id, brand_id, process_id, operating_calendar, min_headcount_weekday, min_headcount_sunday, min_headcount_holiday, active, created_at, updated_at
           )
           VALUES (
-            ${id}, ${body.brandId}, ${body.processId}, ${body.operatingCalendar || "mon_sat_no_holidays"},
-            ${body.minHeadcountWeekday || 1}, ${body.minHeadcountSunday || 0}, ${body.minHeadcountHoliday || 0}, now(), now()
+            ${id}, ${body.brandId}, ${body.processId}, ${body.operatingCalendar},
+            ${body.minHeadcountWeekday}, ${body.minHeadcountSunday}, ${body.minHeadcountHoliday}, ${body.active ?? true}, now(), now()
           );
         `;
         break;
       case "assignments":
+        {
+          const [employee, brandProcess] = await Promise.all([
+            sql`SELECT id FROM employees WHERE id = ${body.employeeId} AND active = true LIMIT 1;`,
+            sql`SELECT id FROM brand_processes WHERE id = ${body.brandProcessId} AND active = true LIMIT 1;`,
+          ]);
+          if (!employee.length || !brandProcess.length) return NextResponse.json({ error: "Selected employee or brand/process rule does not exist." }, { status: 400 });
+        }
         await sql`
           INSERT INTO assignments (
-            id, employee_id, brand_process_id, start_date, end_date, priority, is_exclusive, created_at, updated_at
+            id, employee_id, brand_process_id, start_date, end_date, priority, is_exclusive, active, created_at, updated_at
           )
           VALUES (
             ${id}, ${body.employeeId}, ${body.brandProcessId}, ${body.startDate}, ${body.endDate || null},
-            ${body.priority || 1}, ${body.isExclusive || false}, now(), now()
+            ${body.priority}, ${body.isExclusive}, ${body.active ?? true}, now(), now()
           );
         `;
         break;
       case "weekly_offs":
+        {
+          const employee = await sql`SELECT id FROM employees WHERE id = ${body.employeeId} AND active = true LIMIT 1;`;
+          if (!employee.length) return NextResponse.json({ error: "Selected employee does not exist." }, { status: 400 });
+        }
         await sql`
           INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, effective_to, created_at, updated_at)
           VALUES (${id}, ${body.employeeId}, ${body.weekday}, ${body.effectiveFrom}, ${body.effectiveTo || null}, now(), now());
@@ -179,7 +293,8 @@ export async function POST(
     return NextResponse.json({ success: true, id, message: `${entity} record created` });
   } catch (error: any) {
     console.error(`Create ${entity} error:`, error);
-    return NextResponse.json({ error: error.message || "Failed to create record" }, { status: 500 });
+    const status = error?.code === "23505" ? 409 : 500;
+    return NextResponse.json({ error: error.message || "Failed to create record" }, { status });
   }
 }
 
@@ -206,22 +321,32 @@ export async function DELETE(
   try {
     switch (entity) {
       case "employees":
-        await sql`DELETE FROM employees WHERE id = ${id};`;
-        break;
-      case "pods":
-        await sql`DELETE FROM pods WHERE id = ${id};`;
-        break;
-      case "brands":
-        await sql`DELETE FROM brands WHERE id = ${id};`;
-        break;
-      case "processes":
-        await sql`DELETE FROM processes WHERE id = ${id};`;
+        await sql`UPDATE employees SET active = false, updated_at = now() WHERE id = ${id};`;
         break;
       case "brand_processes":
-        await sql`DELETE FROM brand_processes WHERE id = ${id};`;
+        await sql`UPDATE brand_processes SET active = false, updated_at = now() WHERE id = ${id};`;
         break;
       case "assignments":
-        await sql`DELETE FROM assignments WHERE id = ${id};`;
+        await sql`UPDATE assignments SET active = false, updated_at = now() WHERE id = ${id};`;
+        break;
+      case "pods": {
+        const linked = await sql`SELECT id FROM employees WHERE pod_id = ${id} LIMIT 1;`;
+        if (linked.length) {
+          return NextResponse.json({ error: "This pod still has employees. Reassign them before deleting the pod." }, { status: 409 });
+        }
+        await sql`DELETE FROM pods WHERE id = ${id};`;
+        break;
+      }
+      case "processes": {
+        const linked = await sql`SELECT id FROM brand_processes WHERE process_id = ${id} LIMIT 1;`;
+        if (linked.length) {
+          return NextResponse.json({ error: "This process is used by brand rules. Deactivate or reassign those rules before deleting it." }, { status: 409 });
+        }
+        await sql`DELETE FROM processes WHERE id = ${id};`;
+        break;
+      }
+      case "brands":
+        await sql`UPDATE brands SET active = false, updated_at = now() WHERE id = ${id};`;
         break;
       case "weekly_offs":
         await sql`DELETE FROM weekly_offs WHERE id = ${id};`;
@@ -238,3 +363,119 @@ export async function DELETE(
   }
 }
 
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: { entity: string } }
+) {
+  const { user, errorResponse } = await requireAuth(["manager"]);
+  if (errorResponse) return errorResponse;
+
+  const entity = params.entity as EntityType;
+  if (!ALLOWED_ENTITIES.includes(entity)) {
+    return NextResponse.json({ error: "Invalid master data entity" }, { status: 400 });
+  }
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "Record ID is required" }, { status: 400 });
+
+  try {
+    const body = await req.json();
+    const validationError = validateInput(entity, body);
+    if (validationError) return NextResponse.json({ error: validationError }, { status: 400 });
+    const sql = neon(process.env.DATABASE_URL!);
+    switch (entity) {
+      case "employees":
+        {
+          const existingEmployee = await sql`SELECT id FROM employees WHERE id = ${id} LIMIT 1;`;
+          if (!existingEmployee.length) return NextResponse.json({ error: "Employee not found." }, { status: 404 });
+          const duplicateEmployee = await sql`SELECT id FROM employees WHERE LOWER(email) = ${String(body.email).trim().toLowerCase()} AND id != ${id} LIMIT 1;`;
+          if (duplicateEmployee.length) return NextResponse.json({ error: "An employee with this email already exists." }, { status: 409 });
+          if (body.podId) {
+            const pod = await sql`SELECT id FROM pods WHERE id = ${body.podId} LIMIT 1;`;
+            if (!pod.length) return NextResponse.json({ error: "Selected pod does not exist." }, { status: 400 });
+          }
+          const normalizedEmail = String(body.email).trim().toLowerCase();
+          const matchingAccounts = await sql`
+            SELECT id, role, employee_id FROM users
+            WHERE employee_id = ${id} OR LOWER(email) = ${normalizedEmail};
+          `;
+          if (matchingAccounts.some((account) => account.role === "manager" || (account.employee_id && account.employee_id !== id))) {
+            return NextResponse.json({ error: "This email belongs to another or manager account." }, { status: 409 });
+          }
+          await sql`UPDATE employees SET name = ${String(body.name).trim()}, email = ${normalizedEmail}, pod_id = ${body.podId || null}, active = ${body.active}, updated_at = now() WHERE id = ${id};`;
+        if (body.initialPassword) {
+          const passwordHash = await bcrypt.hash(String(body.initialPassword), 12);
+          if (matchingAccounts.length) {
+            await sql`UPDATE users SET email = ${normalizedEmail}, password_hash = ${passwordHash}, updated_at = now() WHERE id = ${matchingAccounts[0].id};`;
+          } else {
+            await sql`
+              INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at)
+              VALUES (${`user-${id}`}, ${normalizedEmail}, ${passwordHash}, 'employee', ${id}, now(), now());
+            `;
+          }
+        } else {
+          await sql`UPDATE users SET email = ${normalizedEmail}, updated_at = now() WHERE employee_id = ${id} AND role != 'manager';`;
+        }
+        break;
+        }
+      case "pods":
+        {
+          if (body.leadEmployeeId) {
+            const employee = await sql`SELECT id FROM employees WHERE id = ${body.leadEmployeeId} AND active = true LIMIT 1;`;
+            if (!employee.length) return NextResponse.json({ error: "Selected pod lead does not exist." }, { status: 400 });
+          }
+          const priorLead = await sql`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1;`;
+          if (!priorLead.length) return NextResponse.json({ error: "Pod not found." }, { status: 404 });
+        await sql`UPDATE pods SET name = ${body.name}, lead_employee_id = ${body.leadEmployeeId || null}, updated_at = now() WHERE id = ${id};`;
+          if (priorLead[0].lead_employee_id && priorLead[0].lead_employee_id !== body.leadEmployeeId) {
+            await sql`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${priorLead[0].lead_employee_id} AND role = 'pod_lead';`;
+          }
+          if (body.leadEmployeeId) {
+            await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;
+          }
+        }
+        break;
+      case "brands":
+        await sql`UPDATE brands SET name = ${String(body.name).trim()}, code = ${String(body.code).trim().toUpperCase()}, category = ${body.category || null}, active = ${body.active}, updated_at = now() WHERE id = ${id};`;
+        break;
+      case "processes":
+        await sql`UPDATE processes SET name = ${String(body.name).trim()}, code = ${String(body.code).trim().toUpperCase()}, updated_at = now() WHERE id = ${id};`;
+        break;
+      case "brand_processes":
+        {
+          const [brand, process] = await Promise.all([
+            sql`SELECT id FROM brands WHERE id = ${body.brandId} AND active = true LIMIT 1;`,
+            sql`SELECT id FROM processes WHERE id = ${body.processId} LIMIT 1;`,
+          ]);
+          if (!brand.length || !process.length) return NextResponse.json({ error: "Selected brand or process does not exist." }, { status: 400 });
+        await sql`UPDATE brand_processes SET brand_id = ${body.brandId}, process_id = ${body.processId}, operating_calendar = ${body.operatingCalendar}, min_headcount_weekday = ${body.minHeadcountWeekday}, min_headcount_sunday = ${body.minHeadcountSunday}, min_headcount_holiday = ${body.minHeadcountHoliday}, active = ${body.active ?? true}, updated_at = now() WHERE id = ${id};`;
+        }
+        break;
+      case "assignments":
+        {
+          const [employee, brandProcess] = await Promise.all([
+            sql`SELECT id FROM employees WHERE id = ${body.employeeId} AND active = true LIMIT 1;`,
+            sql`SELECT id FROM brand_processes WHERE id = ${body.brandProcessId} AND active = true LIMIT 1;`,
+          ]);
+          if (!employee.length || !brandProcess.length) return NextResponse.json({ error: "Selected employee or brand/process rule does not exist." }, { status: 400 });
+        await sql`UPDATE assignments SET employee_id = ${body.employeeId}, brand_process_id = ${body.brandProcessId}, start_date = ${body.startDate}, end_date = ${body.endDate || null}, priority = ${body.priority}, is_exclusive = ${body.isExclusive}, active = ${body.active ?? true}, updated_at = now() WHERE id = ${id};`;
+        }
+        break;
+      case "weekly_offs":
+        {
+          const employee = await sql`SELECT id FROM employees WHERE id = ${body.employeeId} AND active = true LIMIT 1;`;
+          if (!employee.length) return NextResponse.json({ error: "Selected employee does not exist." }, { status: 400 });
+        await sql`UPDATE weekly_offs SET employee_id = ${body.employeeId}, weekday = ${body.weekday}, effective_from = ${body.effectiveFrom}, effective_to = ${body.effectiveTo || null}, updated_at = now() WHERE id = ${id};`;
+        }
+        break;
+      case "holidays":
+        await sql`UPDATE holidays SET date = ${body.date}, name = ${body.name}, updated_at = now() WHERE id = ${id};`;
+        break;
+    }
+
+    return NextResponse.json({ success: true, id, message: `${entity} record updated` });
+  } catch (error: any) {
+    console.error(`Update ${entity} error:`, error);
+    const status = error?.code === "23505" ? 409 : 500;
+    return NextResponse.json({ error: error.message || "Failed to update record" }, { status });
+  }
+}

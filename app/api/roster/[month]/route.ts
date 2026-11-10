@@ -14,6 +14,7 @@ import {
 } from "@/lib/scheduler/types";
 
 import { formatDateOnly } from "@/lib/date-utils";
+import { isValidRosterMonth } from "@/lib/import/month";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export async function GET(
   if (errorResponse) return errorResponse;
 
   const month = params.month;
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+  if (!isValidRosterMonth(month)) {
     return NextResponse.json({ error: "Invalid month format. Expected YYYY-MM" }, { status: 400 });
   }
 
@@ -86,10 +87,17 @@ export async function GET(
     const brands = await sql`SELECT * FROM brands WHERE active = true ORDER BY name ASC;`;
     const processes = await sql`SELECT * FROM processes ORDER BY code ASC;`;
     const brandProcesses = await sql`
-      SELECT bp.*, b.name as brand_name, p.code as process_code
+      SELECT bp.*, b.name as brand_name, p.code as process_code,
+        COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
+        COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as month_min_headcount_weekday,
+        COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as month_min_headcount_sunday,
+        COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as month_min_headcount_holiday
       FROM brand_processes bp
       JOIN brands b ON bp.brand_id = b.id
-      JOIN processes p ON bp.process_id = p.id;
+      JOIN processes p ON bp.process_id = p.id
+      LEFT JOIN roster_month_rules mr
+        ON mr.brand_process_id = bp.id AND mr.month = ${month}
+      WHERE bp.active = true AND b.active = true;
     `;
     const [yStr, mStr] = month.split("-");
     const lastDayOfMonth = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0).getDate();
@@ -127,11 +135,11 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { month: string } }
 ) {
-  const { user, errorResponse } = await requireAuth(["manager", "pod_lead"]);
+  const { user, errorResponse } = await requireAuth(["manager"]);
   if (errorResponse) return errorResponse;
 
   const month = params.month;
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+  if (!isValidRosterMonth(month)) {
     return NextResponse.json({ error: "Invalid month format. Expected YYYY-MM" }, { status: 400 });
   }
 
@@ -147,17 +155,24 @@ export async function POST(
     // Fetch master data needed for scheduler
     const employeesRaw = await sql`SELECT id, name, email, pod_id, active FROM employees WHERE active = true;`;
     const bpRaw = await sql`
-      SELECT bp.*, b.name as brand_name, p.code as process_code
+      SELECT bp.*, b.name as brand_name, p.code as process_code,
+        COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
+        COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as month_min_headcount_weekday,
+        COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as month_min_headcount_sunday,
+        COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as month_min_headcount_holiday
       FROM brand_processes bp
       JOIN brands b ON bp.brand_id = b.id
-      JOIN processes p ON bp.process_id = p.id;
+      JOIN processes p ON bp.process_id = p.id
+      LEFT JOIN roster_month_rules mr
+        ON mr.brand_process_id = bp.id AND mr.month = ${month}
+      WHERE bp.active = true AND b.active = true;
     `;
     const [postYStr, postMStr] = month.split("-");
     const postLastDay = new Date(parseInt(postYStr, 10), parseInt(postMStr, 10), 0).getDate();
     const postStartStr = `${month}-01`;
     const postEndStr = `${month}-${String(postLastDay).padStart(2, "0")}`;
 
-    const asgnRaw = await sql`SELECT * FROM assignments;`;
+    const asgnRaw = await sql`SELECT * FROM assignments WHERE active = true;`;
     const woRaw = await sql`SELECT * FROM weekly_offs;`;
     const holRaw = await sql`SELECT * FROM holidays WHERE date >= ${postStartStr} AND date <= ${postEndStr};`;
     const leavesRaw = await sql`SELECT * FROM leaves WHERE status = 'approved' AND end_date >= ${postStartStr} AND start_date <= ${postEndStr};`;
@@ -177,10 +192,10 @@ export async function POST(
       brandName: b.brand_name,
       processId: b.process_id,
       processCode: b.process_code,
-      operatingCalendar: b.operating_calendar,
-      minHeadcountWeekday: b.min_headcount_weekday,
-      minHeadcountSunday: b.min_headcount_sunday,
-      minHeadcountHoliday: b.min_headcount_holiday,
+      operatingCalendar: b.month_operating_calendar,
+      minHeadcountWeekday: b.month_min_headcount_weekday,
+      minHeadcountSunday: b.month_min_headcount_sunday,
+      minHeadcountHoliday: b.month_min_headcount_holiday,
     }));
 
     const assignments: AssignmentRule[] = asgnRaw.map((a: any) => ({
