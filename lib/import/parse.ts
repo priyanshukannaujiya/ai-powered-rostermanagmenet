@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { ParsedWorkbook } from "./types";
+import { EmployeeRow, ParsedWorkbook, ScheduleRow } from "./types";
 
 export interface ParseResult {
   ok: boolean;
@@ -206,4 +206,188 @@ export function parseWorkbookBuffer(buffer: Buffer): ParseResult {
       holidays,
     },
   };
+}
+
+const REQUIRED_CSV_HEADERS = [
+  "schedule_month",
+  "pod_code",
+  "pod_name",
+  "pod_lead_employee_id",
+  "employee_id",
+  "employee_name",
+  "employee_email",
+  "initial_password",
+  "weekly_off_day",
+  "employee_active",
+  "brand_code",
+  "brand_name",
+  "brand_category",
+  "process_code",
+  "process_name",
+  "operating_calendar",
+  "weekday_headcount",
+  "sunday_headcount",
+  "holiday_headcount",
+  "min_staff_required",
+  "valid_from",
+  "valid_to",
+  "priority",
+  "is_exclusive",
+];
+
+export function parseRosterCsvBuffer(buffer: Buffer): ParseResult {
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: "buffer", raw: true });
+  } catch (error) {
+    return {
+      ok: false,
+      errors: [`Failed to read CSV: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+
+  const firstSheet = workbook.SheetNames[0];
+  if (!firstSheet) {
+    return { ok: false, errors: ["CSV file is empty"] };
+  }
+
+  const sheet = workbook.Sheets[firstSheet];
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  if (rows.length === 0) {
+    return { ok: false, errors: ["CSV file must contain a header and at least one data row"] };
+  }
+
+  const normalizeKey = (key: string) => key.trim().toLowerCase();
+  const normalizedRows = rows.map((row) =>
+    Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeKey(key), value]))
+  );
+  const headers = new Set(Object.keys(normalizedRows[0]));
+  const missingHeaders = REQUIRED_CSV_HEADERS.filter((header) => !headers.has(header));
+  if (missingHeaders.length > 0) {
+    return {
+      ok: false,
+      errors: missingHeaders.map((header) => `Missing required CSV column: "${header}"`),
+    };
+  }
+
+  const errors: string[] = [];
+  const targetMonths = new Set<string>();
+  const dedupe = <T>(keyFor: (value: T) => string, name: string, values: T[]): T[] => {
+    const result = new Map<string, { value: T; row: number }>();
+    for (const [index, value] of values.entries()) {
+      const key = keyFor(value);
+      const existing = result.get(key);
+      if (existing && JSON.stringify(existing.value) !== JSON.stringify(value)) {
+        errors.push(`${name} "${key}" has inconsistent values on CSV rows ${existing.row} and ${index + 2}`);
+      } else if (!existing) {
+        result.set(key, { value, row: index + 2 });
+      }
+    }
+    return [...result.values()].map(({ value }) => value);
+  };
+
+  normalizedRows.forEach((row, index) => {
+    const rowNumber = index + 2;
+    const month = String(row.schedule_month || "").trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      errors.push(`CSV row ${rowNumber}: schedule_month must be YYYY-MM`);
+    } else {
+      targetMonths.add(month);
+    }
+  });
+  if (targetMonths.size > 1) {
+    errors.push("All CSV rows must use the same schedule_month");
+  }
+
+  const read = (row: Record<string, unknown>, key: string) => String(row[key] ?? "").trim();
+  const required = (row: Record<string, unknown>, key: string, rowNumber: number) => {
+    const value = read(row, key);
+    if (!value) errors.push(`CSV row ${rowNumber}: ${key} cannot be empty`);
+    return value;
+  };
+  const number = (row: Record<string, unknown>, key: string, rowNumber: number) => {
+    const value = read(row, key);
+    if (!/^\d+$/.test(value)) {
+      errors.push(`CSV row ${rowNumber}: ${key} must be a non-negative integer`);
+      return 0;
+    }
+    return Number(value);
+  };
+
+  const pods = normalizedRows.map((row, index) => {
+    const rowNumber = index + 2;
+    return {
+      pod_code: required(row, "pod_code", rowNumber).toUpperCase(),
+      pod_name: required(row, "pod_name", rowNumber),
+      lead_employee_id: read(row, "pod_lead_employee_id").toUpperCase() || null,
+    };
+  });
+  const employees = normalizedRows.map((row, index) => {
+    const rowNumber = index + 2;
+    return {
+      employee_id: required(row, "employee_id", rowNumber).toUpperCase(),
+      name: required(row, "employee_name", rowNumber),
+      email: required(row, "employee_email", rowNumber).toLowerCase(),
+      initial_password: read(row, "initial_password"),
+      pod_code: required(row, "pod_code", rowNumber).toUpperCase(),
+      weekly_off_day: required(row, "weekly_off_day", rowNumber).toUpperCase() as EmployeeRow["weekly_off_day"],
+      active: normalizeBoolean(row.employee_active),
+    };
+  });
+
+  const assignedRows = normalizedRows.filter((row) =>
+    [row.brand_code, row.brand_name, row.process_code, row.process_name].some((value) => String(value ?? "").trim())
+  );
+  const brands = assignedRows.map((row) => ({
+    brand_code: read(row, "brand_code").toUpperCase(),
+    brand_name: read(row, "brand_name"),
+    category: read(row, "brand_category") || null,
+  }));
+  const processes = assignedRows.map((row) => ({
+    process_code: read(row, "process_code").toUpperCase(),
+    process_name: read(row, "process_name"),
+  }));
+  const schedules = assignedRows.map((row, index) => ({
+    brand_code: required(row, "brand_code", index + 2).toUpperCase(),
+    process_code: required(row, "process_code", index + 2).toUpperCase(),
+    operating_calendar: required(row, "operating_calendar", index + 2).toLowerCase() as ScheduleRow["operating_calendar"],
+    weekday_headcount: number(row, "weekday_headcount", index + 2),
+    sunday_headcount: number(row, "sunday_headcount", index + 2),
+    holiday_headcount: number(row, "holiday_headcount", index + 2),
+    min_staff_required: number(row, "min_staff_required", index + 2),
+  }));
+  const assignments = assignedRows.map((row, index) => ({
+    employee_id: required(row, "employee_id", index + 2).toUpperCase(),
+    brand_code: required(row, "brand_code", index + 2).toUpperCase(),
+    process_code: required(row, "process_code", index + 2).toUpperCase(),
+    valid_from: normalizeDate(row.valid_from),
+    valid_to: read(row, "valid_to") ? normalizeDate(row.valid_to) : null,
+    priority: number(row, "priority", index + 2),
+    is_exclusive: normalizeBoolean(row.is_exclusive),
+  }));
+
+  const data: ParsedWorkbook = {
+    target_month: [...targetMonths][0],
+    pods: dedupe((value) => value.pod_code, "Pod", pods),
+    employees: dedupe((value) => value.employee_id, "Employee", employees),
+    brands: dedupe((value) => value.brand_code, "Brand", brands),
+    processes: dedupe((value) => value.process_code, "Process", processes),
+    schedules: dedupe((value) => `${value.brand_code}:${value.process_code}`, "Schedule", schedules),
+    assignments: dedupe(
+      (value) => `${value.employee_id}:${value.brand_code}:${value.process_code}:${value.valid_from}`,
+      "Assignment",
+      assignments
+    ),
+    leaves: [],
+    holidays: [],
+  };
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, data };
+}
+
+export function parseImportFileBuffer(buffer: Buffer, filename: string): ParseResult {
+  return filename.toLowerCase().endsWith(".csv")
+    ? parseRosterCsvBuffer(buffer)
+    : parseWorkbookBuffer(buffer);
 }

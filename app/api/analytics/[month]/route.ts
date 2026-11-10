@@ -14,7 +14,7 @@ export async function GET(
   if (errorResponse) return errorResponse;
 
   const sql = neon(process.env.DATABASE_URL!);
-  const month = params.month || "2026-11";
+  const month = params.month || new Date().toISOString().slice(0, 7);
   const monthId = `roster-${month}`;
 
   const [yearStr, monthStr] = month.split("-");
@@ -245,4 +245,3 @@ export async function GET(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
-

@@ -1,0 +1,37 @@
+schedule_month,pod_code,pod_name,pod_lead_employee_id,employee_id,employee_name,employee_email,initial_password,weekly_off_day,employee_active,brand_code,brand_name,brand_category,process_code,process_name,operating_calendar,weekday_headcount,sunday_headcount,holiday_headcount,min_staff_required,valid_from,valid_to,priority,is_exclusive
+2026-12,POD_ALPHA,Alpha Pod,E001,E001,Aarav Sharma,aarav.sharma@example.com,Sample-Only-Password-2026,SUN,TRUE,BRAND_01,Lumora Skincare,Beauty,CS,Customer Support,all_365,1,1,1,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ALPHA,Alpha Pod,E001,E001,Aarav Sharma,aarav.sharma@example.com,Sample-Only-Password-2026,SUN,TRUE,BRAND_01,Lumora Skincare,Beauty,ACC,Abandoned Cart Conversions,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ALPHA,Alpha Pod,E001,E002,Neha Joshi,neha.joshi@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_07,Daily Greens,Food,RET,Retention and Loyalty,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ALPHA,Alpha Pod,E001,E003,Kunal Kapoor,kunal.kapoor@example.com,Sample-Only-Password-2026,SAT,TRUE,BRAND_02,Brewhaus Coffee,Food,CS,Customer Support,daily_no_holidays,1,1,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ALPHA,Alpha Pod,E001,E004,Isha Singhal,isha.singhal@example.com,Sample-Only-Password-2026,TUE,TRUE,,,,,,,,,,,,,
+2026-12,POD_ALPHA,Alpha Pod,E001,E005,Rohan Das,rohan.das@example.com,Sample-Only-Password-2026,WED,TRUE,,,,,,,,,,,,,
+2026-12,POD_ALPHA,Alpha Pod,E001,E003,Kunal Kapoor,kunal.kapoor@example.com,Sample-Only-Password-2026,SAT,TRUE,BRAND_02,Brewhaus Coffee,Food,NDR,Non-Delivery Report Management,all_365,1,1,1,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_BETA,Beta Pod,E006,E006,Priya Patel,priya.patel@example.com,Sample-Only-Password-2026,SUN,TRUE,,,,,,,,,,,,,
+2026-12,POD_BETA,Beta Pod,E006,E007,Suresh Menon,suresh.menon@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_08,Zen Lifestyle,Lifestyle,NDR,Non-Delivery Report Management,all_365,1,1,1,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_BETA,Beta Pod,E006,E007,Suresh Menon,suresh.menon@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_08,Zen Lifestyle,Lifestyle,RET,Retention and Loyalty,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_BETA,Beta Pod,E006,E008,Deepa Nair,deepa.nair@example.com,Sample-Only-Password-2026,TUE,TRUE,,,,,,,,,,,,,
+2026-12,POD_BETA,Beta Pod,E006,E009,Gaurav Mehta,gaurav.mehta@example.com,Sample-Only-Password-2026,FRI,TRUE,,,,,,,,,,,,,
+2026-12,POD_BETA,Beta Pod,E006,E010,Pooja Hegde,pooja.hegde@example.com,Sample-Only-Password-2026,SAT,TRUE,,,,,,,,,,,,,
+2026-12,POD_GAMMA,Gamma Pod,E011,E011,Rahul Verma,rahul.verma@example.com,Sample-Only-Password-2026,SUN,TRUE,BRAND_03,Nestwell Home,Home,NDR,Non-Delivery Report Management,all_365,1,1,1,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_GAMMA,Gamma Pod,E011,E012,Aditi Sen,aditi.sen@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_09,Velvet Thread,Fashion,CS,Customer Support,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_GAMMA,Gamma Pod,E011,E013,Varun Dhawan,varun.dhawan@example.com,Sample-Only-Password-2026,TUE,TRUE,,,,,,,,,,,,,
+2026-12,POD_GAMMA,Gamma Pod,E011,E014,Kavita Sethi,kavita.sethi@example.com,Sample-Only-Password-2026,WED,TRUE,,,,,,,,,,,,,
+2026-12,POD_GAMMA,Gamma Pod,E011,E015,Arjun Rampal,arjun.rampal@example.com,Sample-Only-Password-2026,THU,TRUE,,,,,,,,,,,,,
+2026-12,POD_GAMMA,Gamma Pod,E011,E016,Meera Rajput,meera.rajput@example.com,Sample-Only-Password-2026,SAT,TRUE,,,,,,,,,,,,,
+2026-12,POD_DELTA,Delta Pod,E017,E017,Sneha Rao,sneha.rao@example.com,Sample-Only-Password-2026,SUN,TRUE,BRAND_04,Trekkr Outdoor,Outdoors,RET,Retention and Loyalty,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_DELTA,Delta Pod,E017,E018,Manish Paul,manish.paul@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_10,Kicks and Co,Fashion,CS,Customer Support,daily_no_holidays,2,1,0,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_DELTA,Delta Pod,E017,E019,Tanvi Shah,tanvi.shah@example.com,Sample-Only-Password-2026,TUE,TRUE,BRAND_10,Kicks and Co,Fashion,CS,Customer Support,daily_no_holidays,2,1,0,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_DELTA,Delta Pod,E017,E020,Karthik Aryan,karthik.aryan@example.com,Sample-Only-Password-2026,WED,TRUE,BRAND_10,Kicks and Co,Fashion,CS,Customer Support,daily_no_holidays,2,1,0,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_DELTA,Delta Pod,E017,E019,Tanvi Shah,tanvi.shah@example.com,Sample-Only-Password-2026,TUE,TRUE,BRAND_10,Kicks and Co,Fashion,ACC,Abandoned Cart Conversions,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_DELTA,Delta Pod,E017,E021,Shreya Ghoshal,shreya.ghoshal@example.com,Sample-Only-Password-2026,FRI,TRUE,,,,,,,,,,,,,
+2026-12,POD_EPSILON,Epsilon Pod,E022,E022,Vikram Malhotra,vikram.malhotra@example.com,Sample-Only-Password-2026,SUN,TRUE,BRAND_05,Aura Glow,Beauty,ACC,Abandoned Cart Conversions,daily_no_holidays,1,1,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_EPSILON,Epsilon Pod,E022,E023,Nikhil Chinapa,nikhil.chinapa@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_11,Pulse Nutrition,Health,CS,Customer Support,all_365,2,1,1,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_EPSILON,Epsilon Pod,E022,E024,Tara Sutaria,tara.sutaria@example.com,Sample-Only-Password-2026,TUE,TRUE,BRAND_11,Pulse Nutrition,Health,CS,Customer Support,all_365,2,1,1,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_EPSILON,Epsilon Pod,E022,E025,Harsh Vardhan,harsh.vardhan@example.com,Sample-Only-Password-2026,WED,TRUE,BRAND_11,Pulse Nutrition,Health,NDR,Non-Delivery Report Management,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_EPSILON,Epsilon Pod,E022,E026,Rhea Chakraborty,rhea.chakraborty@example.com,Sample-Only-Password-2026,SAT,TRUE,,,,,,,,,,,,,
+2026-12,POD_ZETA,Zeta Pod,E027,E027,Ananya Iyer,ananya.iyer@example.com,Sample-Only-Password-2026,SUN,TRUE,BRAND_06,Urban Botanics,Beauty,ACC,Abandoned Cart Conversions,daily_no_holidays,1,1,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ZETA,Zeta Pod,E027,E028,Sameer Kochhar,sameer.kochhar@example.com,Sample-Only-Password-2026,MON,TRUE,BRAND_12,Bloom Baby,Baby,CS,Customer Support,mon_sat_no_holidays,2,0,0,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ZETA,Zeta Pod,E027,E029,Divya Dutta,divya.dutta@example.com,Sample-Only-Password-2026,TUE,TRUE,BRAND_12,Bloom Baby,Baby,CS,Customer Support,mon_sat_no_holidays,2,0,0,2,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ZETA,Zeta Pod,E027,E030,Prateik Babbar,prateik.babbar@example.com,Sample-Only-Password-2026,WED,TRUE,BRAND_12,Bloom Baby,Baby,RET,Retention and Loyalty,mon_sat_no_holidays,1,0,0,1,2026-12-01,2026-12-31,1,FALSE
+2026-12,POD_ZETA,Zeta Pod,E027,E031,Zoya Akhtar,zoya.akhtar@example.com,Sample-Only-Password-2026,THU,TRUE,,,,,,,,,,,,,
+2026-12,POD_ZETA,Zeta Pod,E027,E032,Farhan Qureshi,farhan.qureshi@example.com,Sample-Only-Password-2026,SAT,TRUE,,,,,,,,,,,,,

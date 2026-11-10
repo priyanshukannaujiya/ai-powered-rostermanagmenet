@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import useSWR from "swr";
 import {
   Layers,
@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function DimensionViewsPage() {
-  const currentMonth = "2026-11";
+  const currentMonth = new Date().toISOString().slice(0, 7);
   const [activeTab, setActiveTab] = useState<"brand" | "process" | "pod" | "employee">("brand");
 
   const { data, isLoading } = useSWR(`/api/roster/${currentMonth}`, fetcher, {
@@ -32,7 +32,7 @@ export default function DimensionViewsPage() {
   });
 
   const [selectedBrandId, setSelectedBrandId] = useState<string>("");
-  const [selectedProcessCode, setSelectedProcessCode] = useState<string>("CS");
+  const [selectedProcessCode, setSelectedProcessCode] = useState<string>("");
   const [selectedPodId, setSelectedPodId] = useState<string>("");
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("");
 
@@ -42,6 +42,12 @@ export default function DimensionViewsPage() {
   const employees = data?.meta?.employees || [];
   const brandProcesses = data?.meta?.brandProcesses || [];
   const days = data?.days || [];
+
+  useEffect(() => {
+    if (!selectedProcessCode && processes.length > 0) {
+      setSelectedProcessCode(processes[0].code);
+    }
+  }, [processes, selectedProcessCode]);
 
   return (
     <div className="space-y-6 animate-fade-in">

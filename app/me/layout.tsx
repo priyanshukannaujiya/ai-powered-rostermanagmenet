@@ -6,6 +6,8 @@ import { signOut } from "next-auth/react";
 import { Calendar, User, LogOut } from "lucide-react";
 
 export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
+  const currentMonth = new Date().toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans antialiased text-slate-900">
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
@@ -32,7 +34,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
           <div className="flex items-center gap-2.5">
             <div className="px-3 py-1 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-1.5 shadow-xs">
               <Calendar className="w-3.5 h-3.5 text-cyan-600" />
-              <span>November 2026</span>
+              <span>{currentMonth}</span>
             </div>
 
             <div className="flex items-center gap-1 pl-2 border-l border-slate-200">

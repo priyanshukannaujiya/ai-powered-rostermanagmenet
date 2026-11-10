@@ -2,48 +2,192 @@ import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
 import * as fs from "fs";
 import * as path from "path";
-import { generateTemplateWorkbook } from "./template";
-import { parseWorkbookBuffer } from "./parse";
+import { generateTemplateCsv, generateTemplateWorkbook } from "./template";
+import { parseImportFileBuffer, parseRosterCsvBuffer, parseWorkbookBuffer } from "./parse";
 import { validateWorkbook, computeEntityDiff } from "./validate";
 
+const sampleWorkbookBuffer = () => {
+  const wb = XLSX.utils.book_new();
+  const sheets: Record<string, Record<string, unknown>[]> = {
+    Pods: [
+      { pod_code: "POD_ALPHA", pod_name: "Alpha Pod", lead_employee_id: "EMP_001" },
+      { pod_code: "POD_BETA", pod_name: "Beta Pod", lead_employee_id: "EMP_006" },
+    ],
+    Employees: [
+      {
+        employee_id: "EMP_001",
+        name: "Test Employee",
+        email: "employee@example.com",
+        pod_code: "POD_ALPHA",
+        weekly_off_day: "SUN",
+        active: "TRUE",
+      },
+      {
+        employee_id: "EMP_006",
+        name: "Test Lead",
+        email: "lead@example.com",
+        pod_code: "POD_BETA",
+        weekly_off_day: "MON",
+        active: "TRUE",
+      },
+    ],
+    Brands: [{ brand_code: "LUMORA", brand_name: "Lumora Skincare", category: "Test" }],
+    Processes: [{ process_code: "CS", process_name: "Customer Support" }],
+    Schedules: [{
+      brand_code: "LUMORA",
+      process_code: "CS",
+      operating_calendar: "all_365",
+      weekday_headcount: 1,
+      sunday_headcount: 1,
+      holiday_headcount: 1,
+      min_staff_required: 1,
+    }],
+    Assignments: [{
+      employee_id: "EMP_001",
+      brand_code: "LUMORA",
+      process_code: "CS",
+      valid_from: "2026-11-01",
+      valid_to: "2026-11-30",
+      priority: 1,
+      is_exclusive: "TRUE",
+    }],
+    Leaves: [{
+      employee_id: "EMP_001",
+      date_from: "2026-11-25",
+      date_to: "2026-11-25",
+      type: "leave",
+      status: "approved",
+    }],
+    Holidays: [{ date: "2026-11-08", name: "Test Holiday" }],
+  };
+  for (const [sheetName, rows] of Object.entries(sheets)) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), sheetName);
+  }
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+};
+
 describe("Excel Import System - Parse, Validate, and Diff", () => {
-  // Scenario 1: Valid round-trip on generated template
-  it("Scenario 1: Valid round-trip on standard template workbook", () => {
+  it("downloads blank workbook and CSV templates without example records", () => {
     const buffer = generateTemplateWorkbook();
     const parsed = parseWorkbookBuffer(buffer);
+    const csvWorkbook = XLSX.read(generateTemplateCsv(), { type: "buffer", raw: true });
+    const csvRows = XLSX.utils.sheet_to_json(csvWorkbook.Sheets[csvWorkbook.SheetNames[0]], {
+      header: 1,
+    });
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.data).toBeDefined();
-
-    if (parsed.data) {
-      const validation = validateWorkbook(parsed.data);
-      expect(validation.ok).toBe(true);
-      expect(validation.errors).toHaveLength(0);
-      expect(validation.rowCounts.pods).toBe(1);
-      expect(validation.rowCounts.employees).toBe(1);
-      expect(validation.rowCounts.brands).toBe(1);
-    }
+    expect(parsed.data?.employees).toHaveLength(0);
+    expect(parsed.data?.leaves).toHaveLength(0);
+    expect(csvRows).toHaveLength(1);
   });
 
-  // Scenario 2: Valid round-trip on fixtures/sample-roster.xlsx
-  it("Scenario 2: Valid round-trip on 32-employee reference fixture", () => {
-    const fixturePath = path.join(process.cwd(), "fixtures", "sample-roster.xlsx");
-    expect(fs.existsSync(fixturePath)).toBe(true);
+  describe("Single CSV roster import", () => {
+    it("validates the synthetic 32-person test fixture", () => {
+      const samplePath = path.join(process.cwd(), "fixtures", "sample-roster-import.csv");
+      const parsed = parseImportFileBuffer(fs.readFileSync(samplePath), samplePath);
 
-    const buffer = fs.readFileSync(fixturePath);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.data?.target_month).toBe("2026-12");
+      expect(parsed.data?.employees).toHaveLength(32);
+      expect(parsed.data?.pods).toHaveLength(6);
+      expect(parsed.data?.brands).toHaveLength(12);
+      expect(parsed.data?.assignments.length).toBeGreaterThan(15);
+      expect(parsed.data?.leaves).toHaveLength(0);
+      expect(parsed.data?.holidays).toHaveLength(0);
+      if (parsed.data) {
+        expect(validateWorkbook(parsed.data).ok).toBe(true);
+      }
+    });
+
+    it("parses and validates the flat synthetic CSV fixture", () => {
+      const samplePath = path.join(process.cwd(), "fixtures", "sample-roster-import.csv");
+      const parsed = parseImportFileBuffer(fs.readFileSync(samplePath), samplePath);
+
+      expect(parsed.ok).toBe(true);
+      expect(parsed.data?.target_month).toBe("2026-12");
+      expect(parsed.data?.employees).toHaveLength(32);
+      expect(parsed.data?.leaves).toHaveLength(0);
+      expect(parsed.data && validateWorkbook(parsed.data).ok).toBe(true);
+    });
+
+    it("rejects CSV rows with conflicting employee details", () => {
+      const worksheet = XLSX.utils.json_to_sheet([
+        {
+          schedule_month: "2026-11",
+          pod_code: "POD_ALPHA",
+          pod_name: "Alpha Pod",
+          pod_lead_employee_id: "EMP_001",
+          employee_id: "EMP_001",
+          employee_name: "Aarav Sharma",
+          employee_email: "aarav@example.com",
+          initial_password: "Test-Only-Password-123",
+          weekly_off_day: "SUN",
+          employee_active: "TRUE",
+          brand_code: "BRAND_A",
+          brand_name: "Brand A",
+          brand_category: "",
+          process_code: "CS",
+          process_name: "Customer Support",
+          operating_calendar: "all_365",
+          weekday_headcount: 1,
+          sunday_headcount: 1,
+          holiday_headcount: 1,
+          min_staff_required: 1,
+          valid_from: "2026-11-01",
+          valid_to: "2026-11-30",
+          priority: 1,
+          is_exclusive: "FALSE",
+        },
+        {
+          schedule_month: "2026-11",
+          pod_code: "POD_ALPHA",
+          pod_name: "Alpha Pod",
+          pod_lead_employee_id: "EMP_001",
+          employee_id: "EMP_001",
+          employee_name: "Aarav Sharma",
+          employee_email: "aarav@example.com",
+          initial_password: "Test-Only-Password-123",
+          weekly_off_day: "MON",
+          employee_active: "TRUE",
+          brand_code: "BRAND_B",
+          brand_name: "Brand B",
+          brand_category: "",
+          process_code: "CS",
+          process_name: "Customer Support",
+          operating_calendar: "all_365",
+          weekday_headcount: 1,
+          sunday_headcount: 1,
+          holiday_headcount: 1,
+          min_staff_required: 1,
+          valid_from: "2026-11-01",
+          valid_to: "2026-11-30",
+          priority: 1,
+          is_exclusive: "FALSE",
+        },
+      ]);
+      const csv = Buffer.from(XLSX.utils.sheet_to_csv(worksheet), "utf8");
+      const parsed = parseRosterCsvBuffer(csv);
+
+      expect(parsed.ok).toBe(false);
+      expect(parsed.errors?.some((error) => error.includes('Employee "EMP_001" has inconsistent values'))).toBe(true);
+    });
+  });
+
+  it("validates a workbook containing test records", () => {
+    const buffer = sampleWorkbookBuffer();
     const parsed = parseWorkbookBuffer(buffer);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.data?.employees).toHaveLength(32);
-    expect(parsed.data?.pods).toHaveLength(6);
-    expect(parsed.data?.brands).toHaveLength(12);
-    expect(parsed.data?.processes).toHaveLength(4);
+    expect(parsed.data?.employees).toHaveLength(2);
+    expect(parsed.data?.pods).toHaveLength(2);
+    expect(parsed.data?.brands).toHaveLength(1);
+    expect(parsed.data?.processes).toHaveLength(1);
 
     if (parsed.data) {
       const validation = validateWorkbook(parsed.data);
       expect(validation.ok).toBe(true);
       expect(validation.errors).toHaveLength(0);
-      expect(validation.warnings.length).toBeGreaterThan(0); // Warnings for single-resource brands
+      expect(validation.warnings.some((warning) => warning.code === "SPOF_SINGLE_RESOURCE")).toBe(true);
     }
   });
 
@@ -63,7 +207,7 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
 
   // Scenario 4: Missing header rejection
   it("Scenario 4: Rejects file if a required column header is missing and names it", () => {
-    const wb = XLSX.read(generateTemplateWorkbook(), { type: "buffer" });
+    const wb = XLSX.read(sampleWorkbookBuffer(), { type: "buffer" });
     // Corrupt Employees sheet header: replace "weekly_off_day" with "off_day"
     const badEmployees = [
       {
@@ -89,7 +233,7 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
 
   // Scenario 5: Bad date format rejection
   it("Scenario 5: Rejects bad date format with specific field and message", () => {
-    const buffer = generateTemplateWorkbook();
+    const buffer = sampleWorkbookBuffer();
     const parsed = parseWorkbookBuffer(buffer);
     expect(parsed.ok).toBe(true);
 
@@ -104,7 +248,7 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
 
   // Scenario 6: Unknown pod code referential violation
   it("Scenario 6: Catches referential violation when employee references unknown pod", () => {
-    const buffer = generateTemplateWorkbook();
+    const buffer = sampleWorkbookBuffer();
     const parsed = parseWorkbookBuffer(buffer);
     expect(parsed.ok).toBe(true);
 
@@ -125,8 +269,7 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
 
   // Scenario 7: Pod lead belongs to a different pod
   it("Scenario 7: Catches pod lead belonging to a different pod", () => {
-    const fixturePath = path.join(process.cwd(), "fixtures", "sample-roster.xlsx");
-    const buffer = fs.readFileSync(fixturePath);
+    const buffer = sampleWorkbookBuffer();
     const parsed = parseWorkbookBuffer(buffer);
     expect(parsed.ok).toBe(true);
 
@@ -148,7 +291,7 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
 
   // Scenario 8: Overlapping assignments rejection
   it("Scenario 8: Catches overlapping assignments for same employee and brand process", () => {
-    const buffer = generateTemplateWorkbook();
+    const buffer = sampleWorkbookBuffer();
     const parsed = parseWorkbookBuffer(buffer);
     expect(parsed.ok).toBe(true);
 
@@ -175,7 +318,7 @@ describe("Excel Import System - Parse, Validate, and Diff", () => {
 
   // Scenario 9: Zero-eligible schedule blocks preview
   it("Scenario 9: Blocks preview if any schedule has zero eligible employees", () => {
-    const buffer = generateTemplateWorkbook();
+    const buffer = sampleWorkbookBuffer();
     const parsed = parseWorkbookBuffer(buffer);
     expect(parsed.ok).toBe(true);
 

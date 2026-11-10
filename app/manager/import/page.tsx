@@ -60,6 +60,8 @@ export default function ImportPage() {
 
   const [previewResult, setPreviewResult] = useState<{
     ok: boolean;
+    targetMonth?: string | null;
+    importMode?: "merge" | "replace";
     rowCounts?: Record<string, number>;
     errors?: ValidationError[];
     warnings?: ValidationWarning[];
@@ -69,6 +71,7 @@ export default function ImportPage() {
   const [commitResult, setCommitResult] = useState<{
     ok: boolean;
     importId: string;
+    targetMonth: string;
     conflictsCount: number;
     daysAssigned: number;
   } | null>(null);
@@ -93,8 +96,8 @@ export default function ImportPage() {
       if (json.ok) {
         showToast({
           type: "success",
-          title: "Workbook Validated",
-          message: "All 8 sheets passed referential integrity and format checks.",
+          title: "Roster Data Validated",
+          message: "The uploaded file passed format and referential integrity checks.",
         });
       } else {
         showToast({
@@ -159,8 +162,10 @@ export default function ImportPage() {
     }
   };
 
-  const handleDownloadTemplate = () => {
-    window.location.href = "/api/import/template";
+  const handleDownloadTemplate = (format: "csv" | "xlsx") => {
+    window.location.href = format === "csv"
+      ? "/api/import/template?format=csv"
+      : "/api/import/template";
   };
 
   return (
@@ -174,23 +179,33 @@ export default function ImportPage() {
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
-                Dynamic Excel Import
+                Roster Data Import
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                Upload a structured Excel workbook to replace seed data, update master records, and auto-solve monthly rosters.
+                Upload one CSV to merge pods, employees, brands, process rules, and weekly offs, then regenerate the selected month.
               </p>
             </div>
           </div>
         </div>
 
-        <Button
-          onClick={handleDownloadTemplate}
-          variant="secondary"
-          size="sm"
-          icon={<Download className="w-3.5 h-3.5" />}
-        >
-          Download Template (.xlsx)
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => handleDownloadTemplate("csv")}
+            variant="primary"
+            size="sm"
+            icon={<Download className="w-3.5 h-3.5" />}
+          >
+            Download CSV Template
+          </Button>
+          <Button
+            onClick={() => handleDownloadTemplate("xlsx")}
+            variant="secondary"
+            size="sm"
+            icon={<Download className="w-3.5 h-3.5" />}
+          >
+            Excel Template
+          </Button>
+        </div>
       </div>
 
       {/* Success Banner if committed */}
@@ -200,7 +215,7 @@ export default function ImportPage() {
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <div>
               <h3 className="font-bold text-sm text-emerald-950">
-                Workbook Committed & Roster Auto-Generated
+                Data Imported & Roster Auto-Generated
               </h3>
               <p className="text-xs text-emerald-700 mt-0.5">
                 Import ID: <code className="font-mono font-bold">{commitResult.importId}</code> •{" "}
@@ -209,7 +224,7 @@ export default function ImportPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Link href="/manager/roster/2026-11">
+            <Link href={`/manager/roster/${commitResult.targetMonth}`}>
               <Button variant="primary" size="xs" icon={<Calendar className="w-3 h-3" />}>
                 View Roster Grid
               </Button>
@@ -227,9 +242,9 @@ export default function ImportPage() {
       <Card>
         <CardHeader>
           <div>
-            <CardTitle>Upload Operations Workbook</CardTitle>
+            <CardTitle>Upload Roster Data</CardTitle>
             <CardDescription>
-              Accepts .xlsx or .xls with sheets for Pods, Employees, Brands, Processes, Schedules, Assignments, Leaves, and Holidays.
+                CSV rows describe employee-to-brand/process assignments. Repeat pod, employee, brand, and process details when one employee has multiple assignments. Provide an initial password of at least 12 characters for each employee; passwords are stored as bcrypt hashes. Pod leads are assigned from each pod&apos;s lead employee ID. Leave requests stay in the employee portal and are never imported from CSV.
             </CardDescription>
           </div>
         </CardHeader>
@@ -247,7 +262,7 @@ export default function ImportPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".xlsx,.xls"
+              accept=".csv,.xlsx,.xls"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -259,18 +274,18 @@ export default function ImportPage() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-800">
-                {file ? file.name : "Click to browse or drag and drop workbook"}
+                {file ? file.name : "Click to browse or drag and drop a CSV or workbook"}
               </p>
               <p className="text-xs text-slate-400 mt-1">
                 {file
                   ? `${(file.size / 1024).toFixed(1)} KB • Click to replace file`
-                  : "Requires standard 8-sheet layout in .xlsx format"}
+                  : "CSV imports merge matching records and regenerate the month in schedule_month"}
               </p>
             </div>
             {previewing && (
               <div className="flex items-center gap-2 text-xs text-indigo-600 font-semibold mt-2">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Parsing workbook and validating referential integrity...</span>
+                <span>Parsing file and validating referential integrity...</span>
               </div>
             )}
           </div>
@@ -350,9 +365,15 @@ export default function ImportPage() {
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>Database Diff Summary</CardTitle>
+              <CardTitle>
+                {previewResult.importMode === "merge"
+                  ? "Database Merge Preview"
+                  : "Workbook Replacement Preview"}
+              </CardTitle>
               <CardDescription>
-                Compare incoming changes against currently stored records before committing.
+                {previewResult.importMode === "merge"
+                  ? `Only matching or incoming records will be added or updated; omitted records and existing leave requests are preserved. Roster month: ${previewResult.targetMonth || "not specified"}.`
+                  : "Workbook imports replace the imported employee and assignment set. Employees omitted from the workbook may be deactivated; review the removal counts carefully before committing."}
               </CardDescription>
             </div>
             <Button

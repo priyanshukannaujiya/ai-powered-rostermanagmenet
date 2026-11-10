@@ -6,30 +6,25 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   Calendar,
   ShieldCheck,
-  Users,
   LogIn,
   AlertCircle,
   Eye,
   EyeOff,
-  UserCheck,
-  Building2,
   Lock,
   Mail,
-  CheckCircle2,
   ArrowRight,
   Clock,
   Shield,
   Layers,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
 
-  const [email, setEmail] = useState("manager@opscompany.com");
-  const [password, setPassword] = useState("Manager@123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -57,55 +52,6 @@ function LoginForm() {
       setError(err?.message || "An unexpected error occurred during login.");
       setLoading(false);
     }
-  };
-
-  const demoProfiles = [
-    {
-      role: "Operations Manager",
-      name: "Suresh Rao",
-      email: "manager@opscompany.com",
-      pass: "Manager@123",
-      tag: "Manager",
-      badgeClass: "bg-indigo-50 text-indigo-700 border-indigo-200",
-      icon: ShieldCheck,
-      desc: "Full management access across all pods and master data",
-    },
-    {
-      role: "Pod Lead",
-      name: "Aarav Sharma",
-      email: "lead.pod1@opscompany.com",
-      pass: "Lead@123",
-      tag: "Pod Lead",
-      badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200",
-      icon: Users,
-      desc: "Team schedule management and leave request approvals",
-    },
-    {
-      role: "Team Lead",
-      name: "Priya Patel",
-      email: "employee.priya@opscompany.com",
-      pass: "Employee@123",
-      tag: "Beta Pod",
-      badgeClass: "bg-blue-50 text-blue-700 border-blue-200",
-      icon: UserCheck,
-      desc: "Brewhaus Coffee lead specialist and schedule view",
-    },
-    {
-      role: "Team Member",
-      name: "Neha Joshi",
-      email: "employee.aarav@opscompany.com",
-      pass: "Employee@123",
-      tag: "Alpha Pod",
-      badgeClass: "bg-slate-100 text-slate-700 border-slate-200",
-      icon: Building2,
-      desc: "Lumora Skincare specialist and personal calendar view",
-    },
-  ];
-
-  const selectProfile = (pEmail: string, pPass: string) => {
-    setEmail(pEmail);
-    setPassword(pPass);
-    setError("");
   };
 
   return (
@@ -181,16 +127,8 @@ function LoginForm() {
           </div>
         </div>
 
-        {/* Operational Scope Strip */}
-        <div className="flex items-center gap-6 text-xs text-slate-500 pt-2 border-t border-slate-200">
-          <span className="flex items-center gap-1.5 font-medium text-slate-700">
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            32 Active Staff
-          </span>
-          <span>•</span>
-          <span className="font-medium text-slate-700">6 Operational Pods</span>
-          <span>•</span>
-          <span className="font-medium text-slate-700">12 Operating Brands</span>
+        <div className="pt-3 border-t border-slate-200 text-xs text-slate-500">
+          Your organization&apos;s employees, pods, brands, and schedules appear after the manager imports roster data.
         </div>
       </div>
 
@@ -240,9 +178,6 @@ function LoginForm() {
                 <label className="block text-xs font-semibold text-slate-700">
                   Password
                 </label>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  Demo: Manager@123
-                </span>
               </div>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -283,54 +218,6 @@ function LoginForm() {
               )}
             </button>
           </form>
-
-          {/* Quick Sign-In Profiles */}
-          <div className="mt-6 pt-5 border-t border-slate-200">
-            <div className="flex items-center justify-between mb-2.5">
-              <span className="text-xs font-semibold text-slate-700">
-                Demo Accounts
-              </span>
-              <span className="text-[11px] text-slate-400">
-                Click to autofill
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {demoProfiles.map((p) => {
-                const isSelected = email === p.email;
-                return (
-                  <button
-                    key={p.email}
-                    type="button"
-                    onClick={() => selectProfile(p.email, p.pass)}
-                    className={cn(
-                      "p-2.5 text-left rounded-xl border transition-all duration-150 cursor-pointer flex flex-col justify-between",
-                      isSelected
-                        ? "bg-indigo-50/80 border-indigo-400 ring-1 ring-indigo-400/40"
-                        : "bg-slate-50/80 hover:bg-slate-100/80 border-slate-200"
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <span className="font-semibold text-slate-800 truncate text-[11px]">
-                        {p.role}
-                      </span>
-                      <span
-                        className={cn(
-                          "text-[9px] px-1.5 py-0.2 rounded font-medium border shrink-0",
-                          p.badgeClass
-                        )}
-                      >
-                        {p.tag}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-slate-500 truncate font-mono">
-                      {p.email}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
 
           {/* Security & Access Info */}
           <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">

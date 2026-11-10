@@ -29,9 +29,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const sql = neon(connectionString);
         const rows = await sql`
-          SELECT id, email, password_hash, role, employee_id
-          FROM users
-          WHERE LOWER(email) = ${email}
+          SELECT u.id, u.email, u.password_hash, u.role, u.employee_id
+          FROM users u
+          WHERE LOWER(u.email) = ${email}
+            AND (
+              u.employee_id IS NULL
+              OR EXISTS (
+                SELECT 1 FROM employees e
+                WHERE e.id = u.employee_id AND e.active = true
+              )
+            )
           LIMIT 1;
         `;
 

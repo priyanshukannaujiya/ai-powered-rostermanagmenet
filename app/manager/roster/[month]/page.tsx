@@ -34,7 +34,7 @@ const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function RosterGridPage({ params }: { params: { month: string } }) {
   const router = useRouter();
-  const month = params.month || "2026-11";
+  const month = params.month || new Date().toISOString().slice(0, 7);
   const { showToast } = useToast();
 
   const { data, error, isLoading, mutate } = useSWR(

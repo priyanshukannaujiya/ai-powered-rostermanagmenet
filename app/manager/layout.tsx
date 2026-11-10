@@ -31,10 +31,10 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Extract month from URL if on roster page, otherwise default to "2026-11"
+  const defaultMonth = new Date().toISOString().slice(0, 7);
   const rosterMonthMatch = pathname.match(/\/manager\/roster\/(\d{4}-\d{2})/);
   const [currentMonth, setCurrentMonth] = useState<string>(
-    rosterMonthMatch ? rosterMonthMatch[1] : "2026-11"
+    rosterMonthMatch ? rosterMonthMatch[1] : defaultMonth
   );
 
   useEffect(() => {

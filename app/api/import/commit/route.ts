@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
+import bcrypt from "bcryptjs";
 import "@/lib/db/dns-patch";
-import { parseWorkbookBuffer } from "@/lib/import/parse";
+import { parseImportFileBuffer } from "@/lib/import/parse";
 import { validateWorkbook } from "@/lib/import/validate";
 import { generateRoster } from "@/lib/scheduler/assign";
 import {
@@ -28,6 +29,21 @@ const WEEKDAY_MAP: Record<string, number> = {
   SAT: 6,
 };
 
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function getMonthRange(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return {
+    start: `${month}-01`,
+    end: `${month}-${String(lastDay).padStart(2, "0")}`,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const { user, errorResponse } = await requireAuth(["manager"]);
   if (errorResponse) return errorResponse;
@@ -38,7 +54,7 @@ export async function POST(req: NextRequest) {
 
     if (!file) {
       return NextResponse.json(
-        { ok: false, error: "No Excel file provided" },
+        { ok: false, error: "No CSV or Excel file provided" },
         { status: 400 }
       );
     }
@@ -47,7 +63,8 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // 1. Re-parse and validate strictly
-    const parseResult = parseWorkbookBuffer(buffer);
+    const isCsvImport = file.name.toLowerCase().endsWith(".csv");
+    const parseResult = parseImportFileBuffer(buffer, file.name);
     if (!parseResult.ok || !parseResult.data) {
       return NextResponse.json(
         { ok: false, errors: parseResult.errors || ["Failed to parse file"] },
@@ -64,6 +81,8 @@ export async function POST(req: NextRequest) {
     }
 
     const data = parseResult.data;
+    const targetMonth = data.target_month || new Date().toISOString().slice(0, 7);
+    const { start: monthStart, end: monthEnd } = getMonthRange(targetMonth);
     const sql = neon(process.env.DATABASE_URL!);
     const importId = `imp-${Date.now()}`;
 
@@ -76,7 +95,7 @@ export async function POST(req: NextRequest) {
         ${file.name},
         ${user?.id || "system"},
         now(),
-        'committed',
+        'previewed',
         ${JSON.stringify(validation.rowCounts)}::jsonb,
         ${JSON.stringify({ warnings: validation.warnings })}::jsonb,
         now(),
@@ -87,11 +106,10 @@ export async function POST(req: NextRequest) {
     // 2a. Upsert Pods
     for (const pod of data.pods) {
       await sql`
-        INSERT INTO pods (id, name, lead_employee_id, created_at, updated_at)
-        VALUES (${pod.pod_code}, ${pod.pod_name}, ${pod.lead_employee_id || null}, now(), now())
+        INSERT INTO pods (id, name, created_at, updated_at)
+        VALUES (${pod.pod_code}, ${pod.pod_name}, now(), now())
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
-          lead_employee_id = EXCLUDED.lead_employee_id,
           updated_at = now();
       `;
     }
@@ -163,25 +181,130 @@ export async function POST(req: NextRequest) {
           updated_at = now();
       `;
 
-      // Update weekly off for this employee
+      // CSV weekly offs apply only to the selected month; workbook imports retain legacy replacement behavior.
       const weekdayNum = WEEKDAY_MAP[emp.weekly_off_day] ?? 0;
-      await sql`DELETE FROM weekly_offs WHERE employee_id = ${emp.employee_id};`;
+      if (isCsvImport) {
+        const overlappingRules = await sql`
+          SELECT id, weekday, effective_from, effective_to
+          FROM weekly_offs
+          WHERE employee_id = ${emp.employee_id}
+            AND effective_from <= ${monthEnd}
+            AND (effective_to IS NULL OR effective_to >= ${monthStart});
+        `;
+
+        for (const rule of overlappingRules) {
+          const ruleStart = formatDateOnly(rule.effective_from);
+          const ruleEnd = rule.effective_to ? formatDateOnly(rule.effective_to) : null;
+          const hasEarlierRange = ruleStart < monthStart;
+          const hasLaterRange = !ruleEnd || ruleEnd > monthEnd;
+
+          if (hasEarlierRange) {
+            await sql`
+              UPDATE weekly_offs
+              SET effective_to = ${addDays(monthStart, -1)}, updated_at = now()
+              WHERE id = ${rule.id};
+            `;
+            if (hasLaterRange) {
+              await sql`
+                INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, effective_to, created_at, updated_at)
+                VALUES (
+                  ${`wo-${emp.employee_id}-${addDays(monthEnd, 1)}-${importId}`},
+                  ${emp.employee_id},
+                  ${rule.weekday},
+                  ${addDays(monthEnd, 1)},
+                  ${ruleEnd},
+                  now(),
+                  now()
+                );
+              `;
+            }
+          } else if (hasLaterRange) {
+            await sql`
+              UPDATE weekly_offs
+              SET effective_from = ${addDays(monthEnd, 1)}, updated_at = now()
+              WHERE id = ${rule.id};
+            `;
+          } else {
+            await sql`DELETE FROM weekly_offs WHERE id = ${rule.id};`;
+          }
+        }
+
+        await sql`
+          INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, effective_to, created_at, updated_at)
+          VALUES (
+            ${`wo-${emp.employee_id}-${monthStart}-${importId}`},
+            ${emp.employee_id},
+            ${weekdayNum},
+            ${monthStart},
+            ${monthEnd},
+            now(),
+            now()
+          );
+        `;
+      } else {
+        await sql`DELETE FROM weekly_offs WHERE employee_id = ${emp.employee_id};`;
+        await sql`
+          INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, created_at, updated_at)
+          VALUES (${`wo-${emp.employee_id}`}, ${emp.employee_id}, ${weekdayNum}, '2026-01-01', now(), now());
+        `;
+      }
+    }
+
+    for (const pod of data.pods) {
       await sql`
-        INSERT INTO weekly_offs (id, employee_id, weekday, effective_from, created_at, updated_at)
-        VALUES (
-          ${'wo-' + emp.employee_id},
-          ${emp.employee_id},
-          ${weekdayNum},
-          '2026-01-01',
-          now(),
-          now()
-        );
+        UPDATE pods
+        SET lead_employee_id = ${pod.lead_employee_id || null}, updated_at = now()
+        WHERE id = ${pod.pod_code};
       `;
+    }
+
+    if (isCsvImport) {
+      const podLeadIds = new Set(
+        data.pods.map((pod) => pod.lead_employee_id).filter((id): id is string => Boolean(id))
+      );
+      for (const employee of data.employees) {
+        const password = employee.initial_password;
+        if (!password) {
+          throw new Error(`Missing initial password for imported employee ${employee.employee_id}.`);
+        }
+        const passwordHash = await bcrypt.hash(password, 12);
+        const role = podLeadIds.has(employee.employee_id) ? "pod_lead" : "employee";
+        const matches = await sql`
+          SELECT id, role, employee_id
+          FROM users
+          WHERE LOWER(email) = ${employee.email} OR employee_id = ${employee.employee_id};
+        `;
+        if (matches.some((account) => account.role === "manager")) {
+          throw new Error(`Employee ${employee.employee_id} conflicts with a manager account. Use a different employee email.`);
+        }
+        if (matches.length > 1 || matches.some((account) =>
+          account.employee_id && account.employee_id !== employee.employee_id
+        )) {
+          throw new Error(`Login email ${employee.email} or employee ID ${employee.employee_id} is already linked to another account.`);
+        }
+
+        if (matches.length === 1) {
+          await sql`
+            UPDATE users
+            SET email = ${employee.email}, password_hash = ${passwordHash},
+                role = ${role}, employee_id = ${employee.employee_id}, updated_at = now()
+            WHERE id = ${matches[0].id};
+          `;
+        } else {
+          await sql`
+            INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at)
+            VALUES (
+              ${`user-${employee.employee_id}`}, ${employee.email}, ${passwordHash},
+              ${role}, ${employee.employee_id}, now(), now()
+            );
+          `;
+        }
+      }
     }
 
     // Soft delete employees absent in this upload
     const empIdArray = Array.from(uploadedEmpIds);
-    if (empIdArray.length > 0) {
+    if (!isCsvImport && empIdArray.length > 0) {
       await sql`
         UPDATE employees 
         SET active = false, updated_at = now()
@@ -243,7 +366,9 @@ export async function POST(req: NextRequest) {
 
     // 2f. Upsert Assignments
     // Clear previous assignments linked to other imports or refresh active assignments
-    await sql`UPDATE assignments SET active = false WHERE active = true;`;
+    if (!isCsvImport) {
+      await sql`UPDATE assignments SET active = false WHERE active = true;`;
+    }
 
     for (const asg of data.assignments) {
       const bpId = bpMap.get(`${asg.brand_code}:${asg.process_code}`);
@@ -300,8 +425,7 @@ export async function POST(req: NextRequest) {
       `;
     }
 
-    // 3. Auto-regenerate roster for affected month (Default November 2026 or from assignments)
-    const targetMonth = "2026-11";
+    // 3. Auto-regenerate the roster for the selected import month
     const monthId = `roster-${targetMonth}`;
 
     // Ensure roster_months record exists
@@ -326,8 +450,8 @@ export async function POST(req: NextRequest) {
       `,
       sql`SELECT * FROM assignments WHERE active = true;`,
       sql`SELECT * FROM weekly_offs;`,
-      sql`SELECT * FROM holidays WHERE date >= '2026-11-01' AND date <= '2026-11-30';`,
-      sql`SELECT * FROM leaves WHERE status = 'approved' AND start_date <= '2026-11-30' AND end_date >= '2026-11-01';`,
+      sql`SELECT * FROM holidays WHERE date >= ${monthStart} AND date <= ${monthEnd};`,
+      sql`SELECT * FROM leaves WHERE status = 'approved' AND start_date <= ${monthEnd} AND end_date >= ${monthStart};`,
     ]);
 
     const solverEmployees: EmployeeInfo[] = empRows.map((e: any) => ({
@@ -423,6 +547,12 @@ export async function POST(req: NextRequest) {
         ON CONFLICT (id) DO NOTHING;
       `;
     }
+
+    await sql`
+      UPDATE imports
+      SET status = 'committed', updated_at = now()
+      WHERE id = ${importId};
+    `;
 
     return NextResponse.json({
       ok: true,

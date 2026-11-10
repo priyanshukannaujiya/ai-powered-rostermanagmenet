@@ -26,6 +26,7 @@ const EmployeeRowSchema = z.object({
     errorMap: () => ({ message: "weekly_off_day must be one of MON, TUE, WED, THU, FRI, SAT, SUN" }),
   }),
   active: z.boolean(),
+  initial_password: z.string().optional(),
 });
 
 const BrandRowSchema = z.object({
@@ -134,6 +135,19 @@ export function validateWorkbook(data: ParsedWorkbook): {
   validateRows("Assignments", data.assignments, AssignmentRowSchema);
   validateRows("Leaves", data.leaves, LeaveRowSchema);
   validateRows("Holidays", data.holidays, HolidayRowSchema);
+
+  if (data.target_month) {
+    data.employees.forEach((employee, idx) => {
+      if (!employee.initial_password || employee.initial_password.length < 12) {
+        errors.push({
+          sheet: "Employees",
+          row: idx + 2,
+          field: "initial_password",
+          message: "CSV employee initial_password must be at least 12 characters",
+        });
+      }
+    });
+  }
 
   // 1. Primary Key Uniqueness
   const checkUnique = (

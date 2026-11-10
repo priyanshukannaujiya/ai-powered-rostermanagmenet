@@ -116,7 +116,8 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 export default function AnalyticsPage() {
-  const { data, isLoading } = useSWR("/api/analytics/2026-11", fetcher, {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const { data, isLoading } = useSWR(`/api/analytics/${currentMonth}`, fetcher, {
     refreshInterval: 30000,
     revalidateOnFocus: true,
   });
@@ -212,7 +213,7 @@ export default function AnalyticsPage() {
               </h1>
               <p className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
                 <span className="font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200/60">
-                  November 2026
+                  {new Date(`${currentMonth}-01T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" })}
                 </span>
                 <span>•</span>
                 <span>Live PostgreSQL Data</span>
@@ -645,4 +646,3 @@ export default function AnalyticsPage() {
     </div>
   );
 }
-

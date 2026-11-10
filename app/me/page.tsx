@@ -34,7 +34,8 @@ const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function EmployeePortalPage() {
   const { showToast } = useToast();
-  const currentMonth = "2026-11";
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [year, monthNumber] = currentMonth.split("-").map(Number);
   const [viewMode, setViewMode] = useState<"calendar" | "agenda">("calendar");
 
   // SWR for employee's leaves
@@ -98,20 +99,22 @@ export default function EmployeePortalPage() {
   };
 
   // Leave Request Form State
-  const [startDate, setStartDate] = useState("2026-11-20");
-  const [endDate, setEndDate] = useState("2026-11-21");
+  const today = new Date().toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(today);
+  const [endDate, setEndDate] = useState(today);
   const [leaveType, setLeaveType] = useState<"planned" | "sick" | "other">("planned");
   const [reason, setReason] = useState("");
   const [submittingLeave, setSubmittingLeave] = useState(false);
 
-  // Canonical 30-day month generator for November 2026
-  const allNovemberDates = useMemo(() => {
+  const allMonthDates = useMemo(() => {
     const dates: string[] = [];
-    for (let day = 1; day <= 30; day++) {
-      dates.push(`2026-11-${String(day).padStart(2, "0")}`);
+    const [monthYear, monthIndex] = currentMonth.split("-").map(Number);
+    const daysInMonth = new Date(Date.UTC(monthYear, monthIndex, 0)).getUTCDate();
+    for (let day = 1; day <= daysInMonth; day++) {
+      dates.push(`${currentMonth}-${String(day).padStart(2, "0")}`);
     }
     return dates;
-  }, []);
+  }, [currentMonth]);
 
   // Map API schedule records by clean YYYY-MM-DD
   const rawScheduleList = scheduleData?.data?.schedule || [];
@@ -120,8 +123,7 @@ export default function EmployeePortalPage() {
     for (const item of rawScheduleList) {
       const parsed = parseDateString(item.date);
       if (parsed) {
-        // Only keep November 2026 dates
-        if (parsed.dateStr.startsWith("2026-11")) {
+        if (parsed.dateStr.startsWith(currentMonth)) {
           // Keep first occurrence to avoid duplicates
           if (!map.has(parsed.dateStr)) {
             map.set(parsed.dateStr, {
@@ -134,31 +136,26 @@ export default function EmployeePortalPage() {
       }
     }
     return map;
-  }, [rawScheduleList]);
+  }, [rawScheduleList, currentMonth]);
 
   // Unified canonical list of shifts for all 30 days
   const canonicalMonthShifts = useMemo(() => {
-    return allNovemberDates.map((dateStr) => {
+    return allMonthDates.map((dateStr) => {
       const dayNum = parseInt(dateStr.slice(8), 10);
       const existing = scheduleByDate.get(dateStr);
       if (existing) {
         return existing;
       }
-      // If no explicit row exists yet, check day of week: Sundays (day 1, 8, 15, 22, 29)
-      const d = new Date(2026, 10, dayNum);
-      const dow = d.getDay();
-      const isWeekend = dow === 0;
       return {
         cleanDate: dateStr,
         dayNum,
-        status: isWeekend ? "weekly_off" : "unassigned",
+        status: "unassigned",
         brand_name: null,
         process_code: null,
       };
     });
-  }, [allNovemberDates, scheduleByDate]);
+  }, [allMonthDates, scheduleByDate]);
 
-  // Accurate Summary Metrics (strictly within November 2026)
   const workingShifts = canonicalMonthShifts.filter((s) => s.status === "working");
   const weeklyOffs = canonicalMonthShifts.filter((s) => s.status === "weekly_off");
   const approvedLeaves = canonicalMonthShifts.filter((s) => s.status === "leave");
@@ -167,9 +164,9 @@ export default function EmployeePortalPage() {
   const employeeName =
     rawScheduleList[0]?.employee_name ||
     leavesData?.leaves?.[0]?.employee_name ||
-    "Team Member";
+    "Employee";
   const primaryBrand =
-    workingShifts[0]?.brand_name || "Operations Team";
+    workingShifts[0]?.brand_name || "No assigned brand";
 
   const handleLeaveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,16 +209,13 @@ export default function EmployeePortalPage() {
 
   const leavesList = leavesData?.leaves || [];
 
-  // Calendar matrix calculation for November 2026:
-  // Nov 1, 2026 is Sunday (day index 0)
-  // Total 30 days
   const calendarDays = useMemo(() => {
     // 0 = Sunday, 1 = Monday ... 6 = Saturday
-    const firstDayDow = new Date(2026, 10, 1).getDay(); // 0 (Sunday)
+    const firstDayDow = new Date(year, monthNumber - 1, 1).getDay();
     // Create padding slots before day 1
     const padSlots = Array.from({ length: firstDayDow }).map((_, i) => null);
     return [...padSlots, ...canonicalMonthShifts];
-  }, [canonicalMonthShifts]);
+  }, [canonicalMonthShifts, year, monthNumber]);
 
   return (
     <div className="space-y-6 animate-fade-in font-sans">
@@ -297,7 +291,7 @@ export default function EmployeePortalPage() {
                     {primaryBrand}
                   </span>
                   <span>•</span>
-                  <span>November 2026 Roster</span>
+                  <span>{new Date(year, monthNumber - 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })} Roster</span>
                 </p>
               </div>
             </div>
@@ -307,7 +301,7 @@ export default function EmployeePortalPage() {
           <div className="flex items-center gap-2 self-start md:self-auto">
             <div className="px-3 py-1.5 bg-slate-100 border border-slate-200/80 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-1.5 shadow-xs">
               <CalendarIcon className="w-3.5 h-3.5 text-cyan-600" />
-              <span>30 Days in November</span>
+              <span>{allMonthDates.length} Days in {new Date(year, monthNumber - 1).toLocaleDateString(undefined, { month: "long" })}</span>
             </div>
           </div>
         </div>
@@ -358,10 +352,12 @@ export default function EmployeePortalPage() {
               Roster Status
             </span>
             <div className="flex items-baseline gap-1.5 mt-1">
-              <span className="text-xl font-bold text-emerald-950">Active</span>
+              <span className="text-xl font-bold text-emerald-950">
+                {rawScheduleList.length > 0 ? "Loaded" : "No data"}
+              </span>
             </div>
             <span className="text-[10px] text-emerald-700 mt-1 block font-medium">
-              Published & Verified
+              {rawScheduleList.length > 0 ? "Imported roster records" : "No roster records available"}
             </span>
           </div>
         </div>
@@ -374,7 +370,7 @@ export default function EmployeePortalPage() {
           <Card>
             <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <CardTitle>My November 2026 Schedule</CardTitle>
+                <CardTitle>My {new Date(year, monthNumber - 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })} Schedule</CardTitle>
                 <CardDescription>
                   Your assigned shifts, operating brand tasks, and weekly rest days
                 </CardDescription>
@@ -629,8 +625,7 @@ export default function EmployeePortalPage() {
                   <input
                     type="date"
                     required
-                    min="2026-11-01"
-                    max="2026-11-30"
+                    min={today}
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 font-medium text-slate-800 shadow-xs"
@@ -645,7 +640,6 @@ export default function EmployeePortalPage() {
                     type="date"
                     required
                     min={startDate}
-                    max="2026-11-30"
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
                     className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 font-medium text-slate-800 shadow-xs"

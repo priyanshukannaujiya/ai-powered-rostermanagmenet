@@ -11,6 +11,7 @@ export interface EmployeeRow {
   pod_code: string;
   weekly_off_day: "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
   active: boolean;
+  initial_password?: string;
 }
 
 export interface BrandRow {
@@ -58,6 +59,7 @@ export interface HolidayRow {
 }
 
 export interface ParsedWorkbook {
+  target_month?: string;
   pods: PodRow[];
   employees: EmployeeRow[];
   brands: BrandRow[];

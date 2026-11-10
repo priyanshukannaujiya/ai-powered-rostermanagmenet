@@ -33,7 +33,7 @@ import { formatMonthYear } from "@/lib/utils";
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function ManagerDashboard() {
-  const currentMonth = "2026-11";
+  const currentMonth = new Date().toISOString().slice(0, 7);
   const { showToast } = useToast();
 
   const { data, error, isLoading, mutate } = useSWR(
@@ -81,7 +81,7 @@ export default function ManagerDashboard() {
         showToast({
           type: "success",
           title: "Roster Generated",
-          message: `Solved with ${json.metrics?.coveragePercentage ?? 100}% coverage and ${json.conflictsCount ?? 0} conflict(s).`,
+          message: `Solved with ${json.metrics?.coveragePercentage ?? 0}% coverage and ${json.conflictsCount ?? 0} conflict(s).`,
         });
         mutate();
       } else {
@@ -131,14 +131,11 @@ export default function ManagerDashboard() {
   const isPublished = rosterMonth?.status === "published";
 
   // Dynamic calculations from live data
-  const totalDays = data?.days?.length || 0;
   const workingSlots = data?.days?.filter((d: any) => d.status === "working").length || 0;
-  const coveragePercentage =
-    totalDays > 0 ? Math.min(100, Math.round((workingSlots / (totalDays * 0.75)) * 100)) : 0;
 
-  const totalEmployees = data?.meta?.employees?.length ?? 32;
-  const totalPods = data?.meta?.pods?.length ?? 6;
-  const totalBrands = data?.meta?.brands?.length ?? 12;
+  const totalEmployees = data?.meta?.employees?.length ?? 0;
+  const totalPods = data?.meta?.pods?.length ?? 0;
+  const totalBrands = data?.meta?.brands?.length ?? 0;
 
   const topAtRisk = blockingConflicts.slice(0, 5);
 
@@ -175,7 +172,7 @@ export default function ManagerDashboard() {
         <div className="flex flex-wrap items-center gap-2.5">
           <Button
             onClick={handleGenerate}
-            disabled={generating || isPublished}
+            disabled={generating || isPublished || totalEmployees === 0}
             loading={generating}
             variant="primary"
             size="sm"
@@ -208,6 +205,17 @@ export default function ManagerDashboard() {
           </Link>
         </div>
       </div>
+
+      {data && totalEmployees === 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
+          <p className="text-amber-950">
+            No employee roster data is loaded. Import your organization data before generating a roster.
+          </p>
+          <Link href="/manager/import">
+            <Button variant="primary" size="sm">Import roster data</Button>
+          </Link>
+        </div>
+      )}
 
       {/* KPI Metrics Cards */}
       {isLoading && !data ? (
@@ -246,16 +254,11 @@ export default function ManagerDashboard() {
 
           {/* Coverage Percentage */}
           <StatCard
-            title="Coverage Health"
-            value={`${coveragePercentage}%`}
-            subtitle={`${workingSlots} active shift slots filled`}
+            title="Working Shifts"
+            value={workingSlots}
+            subtitle={`from ${data?.days?.length || 0} roster records`}
             icon={<CheckCircle2 className="w-5 h-5" />}
             variant="emerald"
-            trend={{
-              value: `${coveragePercentage}% Target`,
-              isPositive: coveragePercentage >= 85,
-              label: "staffing score",
-            }}
           />
 
           {/* Active Staff & Pods (Dynamic Data) */}

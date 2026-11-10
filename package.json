@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx lib/db/migrate.ts",
-    "db:seed": "tsx lib/db/seed.ts"
+    "db:seed": "tsx lib/db/seed.ts",
+    "db:bootstrap-manager": "tsx lib/db/seed.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",

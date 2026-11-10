@@ -46,7 +46,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -55,11 +55,11 @@ const toolsDefinition = [
     type: "function",
     function: {
       name: "get_pod_workload",
-      description: "Analyze pod workload equity, shift counts per member, overworked/underworked staff, and weekly-off distribution across all 6 pods.",
+      description: "Analyze pod workload equity, shift counts per member, overworked/underworked staff, and weekly-off distribution across configured pods.",
       parameters: {
         type: "object",
         properties: {
-          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -72,7 +72,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -85,7 +85,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: ["string", "null"], description: "Target month in YYYY-MM format, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -98,9 +98,9 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          employee_name: { type: ["string", "null"], description: "Name of the staff member whose leave to approve, e.g. 'Priya' or 'Rahul'" },
+          employee_name: { type: ["string", "null"], description: "Name of the employee whose leave to approve" },
           leave_id: { type: ["string", "null"], description: "Optional specific leave ID, e.g. 'leave-pending-1'" },
-          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -113,8 +113,8 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          brand_or_process: { type: ["string", "null"], description: "Name of the brand or process code (e.g. 'Brewhaus', 'CS', 'NDR')" },
-          date: { type: ["string", "null"], description: "Target date in YYYY-MM-DD format, e.g. '2026-11-15'" },
+          brand_or_process: { type: ["string", "null"], description: "Configured brand name or process code" },
+          date: { type: ["string", "null"], description: "Target date in YYYY-MM-DD format" },
         },
       },
     },
@@ -127,9 +127,9 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          employee_name: { type: ["string", "null"], description: "Name of the employee to inspect (e.g. 'Priya Patel', 'Aarav')" },
-          employee_id: { type: ["string", "null"], description: "Optional employee ID, e.g. 'emp-6'" },
-          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
+          employee_name: { type: ["string", "null"], description: "Name of the employee to inspect" },
+          employee_id: { type: ["string", "null"], description: "Optional employee ID" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -142,7 +142,7 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -155,9 +155,9 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          employee_name: { type: ["string", "null"], description: "Name of the staff member with pending leave, e.g. 'Priya' or 'Rahul'" },
+          employee_name: { type: ["string", "null"], description: "Name of the employee with pending leave" },
           leave_id: { type: ["string", "null"], description: "Optional specific leave ID" },
-          month: { type: ["string", "null"], description: "Target month, e.g. '2026-11'" },
+          month: { type: ["string", "null"], description: "Target month in YYYY-MM format" },
         },
       },
     },
@@ -170,10 +170,10 @@ const toolsDefinition = [
       parameters: {
         type: "object",
         properties: {
-          replacement_employee_name: { type: "string", description: "Name of the replacement employee to appoint (e.g. 'Aarav Sharma', 'Aditi Sen')" },
-          date_or_range: { type: "string", description: "Target date or date range (e.g. '2026-11-20 to 2026-11-21' or '2026-11-20')" },
-          brand_or_process: { type: ["string", "null"], description: "Optional brand or process (e.g. 'Brewhaus CS', 'Brewhaus Coffee')" },
-          original_employee_name: { type: ["string", "null"], description: "Optional original employee being replaced (e.g. 'Priya Patel')" },
+          replacement_employee_name: { type: "string", description: "Name of the replacement employee to appoint" },
+          date_or_range: { type: "string", description: "Target date or date range in YYYY-MM-DD format" },
+          brand_or_process: { type: ["string", "null"], description: "Configured brand name or process" },
+          original_employee_name: { type: ["string", "null"], description: "Optional name of the employee being replaced" },
           approve_leave: { type: ["boolean", "null"], description: "Whether to approve original employee pending leave (default: true)" },
         },
         required: ["replacement_employee_name", "date_or_range"],
@@ -186,6 +186,19 @@ const toolsDefinition = [
       name: "get_import_summary",
       description: "Get metadata and row statistics of recent dynamic Excel imports, including filename, uploaded_by, status, row_counts, and timestamp.",
       parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_roster_configuration",
+      description: "Read live imported roster configuration: pods, employees, weekly offs, brands, process calendars, coverage rules, and employee assignments. Results are scoped to the caller's role.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: ["string", "null"], description: "Month to inspect in YYYY-MM format" },
+        },
+      },
     },
   },
   {
@@ -245,7 +258,7 @@ async function executeTool(
   userId?: string
 ) {
   const sql = neon(process.env.DATABASE_URL!);
-  const month = args.month || "2026-11";
+  const month = args.month || new Date().toISOString().slice(0, 7);
   const monthId = `roster-${month}`;
 
   // Check active import state
@@ -574,14 +587,17 @@ async function executeTool(
           assignedBrands: (assignedBrandsByEmp.get(l.employee_id) || ["Operations Team"]).join(", "),
         })),
         activeConflictsCount: conflicts.length,
-        actionPrompt: "Ask 'If I approve Priya's leave, is there any conflict for the client?' to simulate client coverage impact and discover available replacement staff.",
+        actionPrompt: "Ask whether approving a specific employee's leave will create client coverage conflicts.",
       };
     }
 
     // 5. Cross-Trained Backup Staff Search
     case "find_backups": {
-      const targetQuery = args.brand_or_process || args.brand_process_id || "CS";
-      const date = args.date || "2026-11-15";
+      const targetQuery = args.brand_or_process || args.brand_process_id;
+      const date = args.date;
+      if (!targetQuery || !date) {
+        return { error: "Specify a brand or process and a date to find qualified backups." };
+      }
 
       const allBpRaw = await sql`
         SELECT bp.*, b.name as brand_name, p.code as process_code
@@ -598,8 +614,10 @@ async function executeTool(
           return words.every((w: string) => combined.includes(w));
         }) ||
         allBpRaw.find((b: any) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(words[0])) ||
-        allBpRaw.find((b: any) => b.process_code.toLowerCase() === words[words.length - 1]) ||
-        allBpRaw[0];
+        allBpRaw.find((b: any) => b.process_code.toLowerCase() === words[words.length - 1]);
+      if (!targetBp) {
+        return { error: `No configured brand or process matches "${targetQuery}".` };
+      }
 
       const certifiedStaff = await sql`
         SELECT DISTINCT e.id, e.name as employee_name, e.email, p.name as pod_name,
@@ -1062,6 +1080,11 @@ async function executeTool(
         original_employee_name,
         approve_leave = true,
       } = args;
+      if (!replacement_employee_name || !date_or_range || !brand_or_process) {
+        return {
+          error: "Specify a replacement employee, date or date range, and brand or process before making an assignment.",
+        };
+      }
 
       // 1. Find replacement employee
       const repRows = await sql`
@@ -1077,19 +1100,34 @@ async function executeTool(
       const repEmp = repRows[0];
 
       // 2. Parse dates
-      let dateList: string[] = [];
-      const rawDate = String(date_or_range || "2026-11-20");
+      const rawDate = String(date_or_range);
       const matches = rawDate.match(/\d{4}-\d{2}-\d{2}/g);
+      if (!matches || matches.length > 2) {
+        return { error: "Provide one date or a range with exactly two dates in YYYY-MM-DD format." };
+      }
+      const parsedDates = matches.map((value: string) => new Date(`${value}T00:00:00.000Z`));
+      if (parsedDates.some((value: Date, index: number) => Number.isNaN(value.getTime()) || value.toISOString().slice(0, 10) !== matches[index])) {
+        return { error: "One or more assignment dates are invalid." };
+      }
+      if (matches.length === 2 && matches[0] > matches[1]) {
+        return { error: "The assignment start date must be on or before its end date." };
+      }
+      if (matches.some((value: string) => value.slice(0, 7) !== month)) {
+        return { error: `Assignment dates must be within the selected roster month (${month}).` };
+      }
+      const dateList: string[] = [];
       if (matches && matches.length >= 2) {
-        const s = parseInt(matches[0].slice(8), 10);
-        const e = parseInt(matches[1].slice(8), 10);
-        for (let day = s; day <= e; day++) {
-          dateList.push(`${matches[0].slice(0, 8)}${String(day).padStart(2, "0")}`);
+        const cursor = new Date(`${matches[0]}T00:00:00.000Z`);
+        const end = new Date(`${matches[1]}T00:00:00.000Z`);
+        while (cursor <= end && dateList.length <= 31) {
+          dateList.push(cursor.toISOString().slice(0, 10));
+          cursor.setUTCDate(cursor.getUTCDate() + 1);
         }
-      } else if (matches && matches.length === 1) {
-        dateList = [matches[0]];
+        if (cursor <= end) {
+          return { error: "An assignment range cannot exceed 31 days." };
+        }
       } else {
-        dateList = ["2026-11-20", "2026-11-21"];
+        dateList.push(matches[0]);
       }
 
       // 3. Find target brand process
@@ -1105,8 +1143,7 @@ async function executeTool(
         const words = brand_or_process.toLowerCase().split(/\s+/).filter(Boolean);
         targetBp =
           allBp.find((b: any) => words.every((w: string) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(w))) ||
-          allBp.find((b: any) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(words[0])) ||
-          allBp[0];
+          allBp.find((b: any) => `${b.brand_name} ${b.process_code}`.toLowerCase().includes(words[0]));
       }
 
       // If not specified, look up original employee's brand process
@@ -1144,8 +1181,7 @@ async function executeTool(
       }
 
       if (!targetBp) {
-        const defBp = allBp.find((b: any) => b.brand_name.includes("Brewhaus") && b.process_code === "CS") || allBp[0];
-        targetBp = defBp;
+        return { error: `No configured brand or process matches "${brand_or_process}".` };
       }
 
       // 4. Update roster days for replacement employee
@@ -1290,6 +1326,113 @@ async function executeTool(
       };
     }
 
+    case "get_roster_configuration": {
+      const targetMonth = args.month || month;
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth)) {
+        return { error: "month must use YYYY-MM format" };
+      }
+      const [year, monthNumber] = targetMonth.split("-").map(Number);
+      const monthStart = `${targetMonth}-01`;
+      const monthEnd = `${targetMonth}-${String(new Date(Date.UTC(year, monthNumber, 0)).getUTCDate()).padStart(2, "0")}`;
+
+      let employeeRows: any[];
+      if (userRole === "manager") {
+        employeeRows = await sql`SELECT id, name, email, pod_id, active FROM employees ORDER BY name;`;
+      } else if (callerEmployeeId && userRole === "pod_lead") {
+        employeeRows = await sql`
+          SELECT e.id, e.name, e.email, e.pod_id, e.active
+          FROM employees e
+          WHERE e.pod_id = (SELECT pod_id FROM employees WHERE id = ${callerEmployeeId})
+          ORDER BY e.name;
+        `;
+      } else if (callerEmployeeId) {
+        employeeRows = await sql`
+          SELECT id, name, email, pod_id, active FROM employees
+          WHERE id = ${callerEmployeeId};
+        `;
+      } else {
+        return { error: "No employee scope is available for this account." };
+      }
+
+      const employeeIds = employeeRows.map((employee) => employee.id);
+      const visiblePods = userRole === "manager"
+        ? await sql`SELECT id, name, lead_employee_id FROM pods ORDER BY name;`
+        : await sql`
+            SELECT id, name, lead_employee_id FROM pods
+            WHERE id IN (SELECT pod_id FROM employees WHERE id = ${callerEmployeeId});
+          `;
+      if (employeeIds.length === 0) {
+        return {
+          active_import_id: activeImportId,
+          month: targetMonth,
+          pods: visiblePods,
+          employees: [],
+          weekly_offs: [],
+          brand_processes: [],
+          assignments: [],
+        };
+      }
+
+      const [weeklyOffs, assignmentRows] = await Promise.all([
+        sql`
+          SELECT employee_id, weekday, effective_from, effective_to
+          FROM weekly_offs
+          WHERE employee_id = ANY(${employeeIds})
+            AND effective_from <= ${monthEnd}
+            AND (effective_to IS NULL OR effective_to >= ${monthStart})
+          ORDER BY employee_id, effective_from;
+        `,
+        sql`
+          SELECT a.employee_id, e.name AS employee_name, p.name AS pod_name,
+                 b.code AS brand_code, b.name AS brand_name, b.category,
+                 pr.code AS process_code, pr.name AS process_name,
+                 bp.operating_calendar, bp.min_headcount_weekday,
+                 bp.min_headcount_sunday, bp.min_headcount_holiday,
+                 a.start_date, a.end_date, a.priority, a.is_exclusive
+          FROM assignments a
+          JOIN employees e ON e.id = a.employee_id
+          LEFT JOIN pods p ON p.id = e.pod_id
+          JOIN brand_processes bp ON bp.id = a.brand_process_id
+          JOIN brands b ON b.id = bp.brand_id
+          JOIN processes pr ON pr.id = bp.process_id
+          WHERE a.active = true
+            AND bp.active = true
+            AND a.employee_id = ANY(${employeeIds})
+            AND a.start_date <= ${monthEnd}
+            AND (a.end_date IS NULL OR a.end_date >= ${monthStart})
+          ORDER BY b.name, pr.code, e.name;
+        `,
+      ]);
+
+      const configurationByProcess = new Map<string, Record<string, unknown>>();
+      for (const assignment of assignmentRows) {
+        const key = `${assignment.brand_code}:${assignment.process_code}`;
+        if (!configurationByProcess.has(key)) {
+          configurationByProcess.set(key, {
+            brand_code: assignment.brand_code,
+            brand_name: assignment.brand_name,
+            category: assignment.category,
+            process_code: assignment.process_code,
+            process_name: assignment.process_name,
+            operating_calendar: assignment.operating_calendar,
+            weekday_headcount: assignment.min_headcount_weekday,
+            sunday_headcount: assignment.min_headcount_sunday,
+            holiday_headcount: assignment.min_headcount_holiday,
+          });
+        }
+      }
+
+      return {
+        active_import_id: activeImportId,
+        month: targetMonth,
+        pods: visiblePods,
+        employees: employeeRows,
+        weekly_offs: weeklyOffs,
+        brand_processes: [...configurationByProcess.values()],
+        assignments: assignmentRows,
+      };
+    }
+
     // 13. list_brands
     case "list_brands": {
       const brandsList = await sql`
@@ -1404,7 +1547,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { message, month = "2026-11" } = body;
+  const { message, month = new Date().toISOString().slice(0, 7) } = body;
 
   if (!message || typeof message !== "string") {
     return NextResponse.json({ error: "Message string is required" }, { status: 400 });
@@ -1421,40 +1564,12 @@ export async function POST(req: NextRequest) {
   const latestImportRec = await sql`SELECT id, filename, uploaded_at, status FROM imports WHERE status = 'committed' ORDER BY uploaded_at DESC LIMIT 1;`;
   const activeImportId = latestImportRec[0]?.id || null;
 
-  const systemPrompt = `You are the AI Operations Intelligence Copilot for the Smart Roster Management System.
-You are directly connected to the LIVE PostgreSQL database and deterministic scheduling graph.
-User session: ${user!.email} (Role: ${user!.role})
-Current month cycle: ${month}
-Active Workbook Import: ${activeImportId ? `${activeImportId} (${latestImportRec[0].filename})` : "Default Seeded State"}
+  const systemPrompt = `You are the AI Operations Assistant for the Smart Roster Management System.
+User session: ${user!.email} (role: ${user!.role})
+Roster month: ${month}
+Latest committed import: ${activeImportId ? `${activeImportId} (${latestImportRec[0].filename})` : "none"}
 
-Database-Driven Guidelines:
-- Answer ONLY from tools that query the live database, never invent or hallucinate data.
-- If asked about brands, employees, pods, or schedules and the database has no records or no import is active, state: "No dynamic roster data is currently loaded. Please upload a roster workbook via the Excel Import page."
-- Trace operational insights back to the active import (${activeImportId || "seeded"}).
-
-Core End-to-End Operational Workflow for Leave Inquiries & Shift Appointments:
-1. When asked if there are any leave applications ("is there any leave application", "pending leave", "who applied for leave"):
-   - Call the get_pending_leaves tool.
-   - List each applicant, dates, pod, and which client brands/processes they handle (e.g. Brewhaus Coffee CS).
-   - Proactively suggest: "Would you like me to simulate the client impact and check for conflicts if you approve this leave?"
-2. When asked about client conflicts upon approving leave ("if i approve leave is there any conflict for the client", "simulate approving Priya's leave", "what happens if I approve"):
-   - Call the check_leave_impact_and_conflicts tool with employee_name (e.g. "Priya").
-   - Clearly report any blocking conflict: client name, operating calendar (e.g. daily_365, min 1), why coverage drops to 0 (sole resource on leave).
-   - Also list the certified cross-trained replacement staff who are available on those dates (e.g. Aarav Sharma, Aditi Sen, Manish Paul, Tanvi Shah).
-   - Ask the manager: "Would you like me to assign an available employee (e.g. Aarav Sharma) to cover this client shift and approve the leave?"
-3. When asked if any other employee is available on that day ("is there any other employee available in that day", "who is available"):
-   - Call find_backups or check_leave_impact_and_conflicts to list the qualified candidates, their pods, and confirm they are not on leave.
-4. When instructed to assign a new employee ("assign Aarav Sharma to cover Brewhaus CS on Nov 20 and 21", "assign new employee for that day", "appoint Aarav"):
-   - Call the assign_replacement_employee tool with replacement_employee_name, date_or_range, brand_or_process, original_employee_name.
-   - Confirm that:
-     * The replacement employee has been officially appointed to the client shift in the live roster.
-     * The original employee's leave has been marked approved.
-     * Client understaffing conflicts have been resolved.
-     * A formal appointment notification has been delivered to the employee portal.
-
-General Directives:
-- Always call live database tools.
-- Format responses in clean GitHub Markdown with clear section headers (###), bold badges, bullet points, and actionable next steps.`;
+Use the provided tools to answer from live database records. Never invent people, brands, dates, coverage numbers, or actions. Keep the caller's role-based access boundaries. If the database has no relevant records, state that clearly and direct managers to the import page. Before making a roster change, ensure the user specified the employee, dates, and configured brand/process needed for that action. Confirm an action only when its tool result reports success.`;
 
   try {
     let replyText = "";
@@ -1563,167 +1678,12 @@ General Directives:
       }
     }
 
-    // High-Precision Local Deterministic Fallback if API key is temporarily unavailable
     if (!replyText) {
-      const queryLower = message.toLowerCase();
-      const isAssign =
-        queryLower.includes("assign") ||
-        queryLower.includes("appoint") ||
-        queryLower.includes("replace") ||
-        queryLower.includes("substitute");
-      const isConflictCheck =
-        queryLower.includes("conflict") ||
-        queryLower.includes("if i approve") ||
-        queryLower.includes("simulate");
-      const isLeaveApp =
-        queryLower.includes("leave application") ||
-        queryLower.includes("any leave") ||
-        queryLower.includes("pending leave") ||
-        queryLower.includes("leave queue") ||
-        queryLower.includes("who applied");
-      const isBackupCheck =
-        queryLower.includes("available") ||
-        queryLower.includes("who can cover") ||
-        queryLower.includes("who covers") ||
-        queryLower.includes("backups");
-      const isApprove =
-        queryLower.includes("approve") ||
-        queryLower.includes("aproov") ||
-        queryLower.includes("accept") ||
-        queryLower.includes("grant");
-
-      if (isAssign) {
-        toolUsed = "assign_replacement_employee";
-        let repName = "Aarav Sharma";
-        if (queryLower.includes("aditi")) repName = "Aditi Sen";
-        else if (queryLower.includes("manish")) repName = "Manish Paul";
-        else if (queryLower.includes("tanvi")) repName = "Tanvi Shah";
-
-        toolResult = await executeTool(
-          "assign_replacement_employee",
-          {
-            replacement_employee_name: repName,
-            date_or_range: "2026-11-20 to 2026-11-21",
-            brand_or_process: "Brewhaus CS",
-            original_employee_name: "Priya Patel",
-            approve_leave: true,
-            month,
-          },
-          user!.role,
-          user!.employeeId,
-          user!.id
-        );
-        if (toolResult?.systemReflected) systemReflected = true;
-
-        if (toolResult?.success) {
-          replyText = `### ✅ Shift Replacement Appointed & Portal Notified
-• **Appointed Staff**: **${toolResult.appointedEmployee}** (${toolResult.appointedEmployeePod})
-• **Assigned Brand**: **${toolResult.brandName}** (${toolResult.processCode})
-• **Coverage Dates**: ${toolResult.dates.join(", ")}
-• **Original Staff**: **${toolResult.replacedEmployee}** (Leave officially APPROVED)
-• **Client Conflicts**: Resolved with zero understaffing.
-• **Employee Portal**: 🔔 Official appointment notification delivered to ${toolResult.appointedEmployee}'s dashboard!`;
-        } else {
-          replyText = `### ⛔ Assignment Notice\n${toolResult?.error || "Could not complete replacement assignment."}`;
-        }
-      } else if (isConflictCheck) {
-        toolUsed = "check_leave_impact_and_conflicts";
-        let targetEmp = "Priya";
-        if (queryLower.includes("rahul")) targetEmp = "Rahul";
-
-        toolResult = await executeTool(
-          "check_leave_impact_and_conflicts",
-          { employee_name: targetEmp, month },
-          user!.role,
-          user!.employeeId,
-          user!.id
-        );
-
-        if (toolResult?.hasClientConflict) {
-          const c0 = toolResult.conflicts[0];
-          const backups = toolResult.availableSubstitutes || [];
-          replyText = `### ⚠️ Client Conflict Detected (${toolResult.employeeName}'s Leave)
-• **Client Process**: **${c0.brandName}** (${c0.processCode})
-• **Operating Calendar**: \`${c0.operatingCalendar}\` (Daily 365, Required Staff: **${c0.requiredHeadcount}**)
-• **Conflict Severity**: **${c0.severity.toUpperCase()}** — Coverage drops to **0** because ${toolResult.employeeName} is the sole certified resource.
-
-#### 👥 Available Certified Backup Employees (${c0.date}):
-${backups.slice(0, 4).map((b: any, idx: number) => `${idx + 1}. **${b.employeeName}** (${b.podName}) — *${b.status}*`).join("\n")}
-
-💡 *Next Step: Reply "**Assign Aarav Sharma to cover Brewhaus CS on Nov 20 and 21**" to appoint him, resolve the client conflict, and notify him on the Employee Portal.*`;
-        } else {
-          replyText = `### ✅ No Client Conflicts
-Approving leave for **${toolResult?.employeeName || "Employee"}** satisfies all client coverage rules.`;
-        }
-      } else if (isLeaveApp) {
-        toolUsed = "get_pending_leaves";
-        toolResult = await executeTool("get_pending_leaves", { month }, user!.role, user!.employeeId, user!.id);
-        const lvs = toolResult?.leaves || [];
-        replyText = `### 📋 Pending Leave Applications (${lvs.length} in Queue)
-${lvs.map((l: any, idx: number) => `${idx + 1}. **${l.employee}** (${l.pod})
-   - **Dates**: ${l.dates} (${l.type})
-   - **Reason**: "${l.reason}"
-   - **Assigned Client Brand**: **${l.assignedBrands}**`).join("\n\n")}
-
-💡 *You can ask: "**If I approve Priya's leave, is there any conflict for the client?**" to simulate coverage impact and discover replacement staff.*`;
-      } else if (isBackupCheck) {
-        toolUsed = "find_backups";
-        toolResult = await executeTool("find_backups", { brand_or_process: "Brewhaus CS", date: "2026-11-20", month }, user!.role, user!.employeeId, user!.id);
-        const bks = toolResult?.backups || [];
-        replyText = `### 👥 Available Cross-Trained Backup Staff (${toolResult?.brandName} ${toolResult?.processCode})
-• **Date**: ${toolResult?.date}
-• **Qualified Staff Found**: ${bks.length} certified peers
-${bks.slice(0, 5).map((b: any, idx: number) => `${idx + 1}. **${b.employeeName}** (${b.podName}) — *${b.qualificationReason}*`).join("\n")}
-
-💡 *You can appoint any of these staff members to cover the shift.*`;
-      } else if (isApprove) {
-        toolUsed = "approve_leave";
-        let targetEmployeeName = "";
-        if (queryLower.includes("priya")) targetEmployeeName = "Priya";
-        else if (queryLower.includes("rahul")) targetEmployeeName = "Rahul";
-        else if (queryLower.includes("manish")) targetEmployeeName = "Manish";
-
-        toolResult = await executeTool(
-          "approve_leave",
-          { month, employee_name: targetEmployeeName },
-          user!.role,
-          user!.employeeId,
-          user!.id
-        );
-        if (toolResult?.systemReflected) systemReflected = true;
-
-        if (toolResult?.error) {
-          replyText = `### ⛔ Authorization Notice\n${toolResult.error}`;
-        } else if (toolResult?.alreadyApproved) {
-          replyText = `### ℹ️ Leave Already Approved\n**Staff**: **${toolResult.employeeName}** (${toolResult.podName})\n• **Dates**: ${toolResult.startDate} to ${toolResult.endDate} (${toolResult.leaveType})\n• Already marked as APPROVED in PostgreSQL.`;
-        } else if (toolResult?.approved) {
-          replyText = `### ✅ Leave Approved & Roster Replanned\n• **Staff**: **${toolResult.employeeName}** (${toolResult.podName})\n• **Dates**: ${toolResult.startDate} to ${toolResult.endDate}\n• **Shifts Updated**: ${toolResult.changedDaysCount} shifts marked as Leave.\n• **PostgreSQL Status**: Committed & Re-evaluated.`;
-        }
-      } else if (
-        queryLower.includes("pod") ||
-        queryLower.includes("workload") ||
-        queryLower.includes("capacity") ||
-        queryLower.includes("equity") ||
-        queryLower.includes("fair")
-      ) {
-        toolUsed = "get_pod_workload";
-        toolResult = await executeTool("get_pod_workload", { month }, user!.role, user!.employeeId, user!.id);
-        replyText = `### 👥 Pod Workload & Fairness (${month})\n• **Fairness Score**: ${toolResult.equity?.fairnessScore ?? 92}/100\n• **Mean Shifts**: ${toolResult.equity?.meanShifts} shifts/staff\n• **Weekly-Off Honoring Rate**: ${toolResult.equity?.preferenceHonoredRate}%`;
-      } else if (
-        queryLower.includes("spof") ||
-        queryLower.includes("single") ||
-        queryLower.includes("risk")
-      ) {
-        toolUsed = "get_spof_risks";
-        toolResult = await executeTool("get_spof_risks", { month }, user!.role, user!.employeeId, user!.id);
-        replyText = `### ⚠️ Single-Resource (SPOF) Risk Audit (${month})\n• **Vulnerable Brands Identified**: ${toolResult?.spofCount ?? 0}\n${(toolResult?.risks || []).slice(0, 4).map((r: any) => `• **${r.brandName}** (${r.processCode}): Handled solely by **${r.employeeName}** (${r.riskLevel} risk)`).join("\n")}`;
-      } else {
-        toolUsed = "get_system_health";
-        toolResult = await executeTool("get_system_health", { month }, user!.role, user!.employeeId, user!.id);
-        replyText = `### 📊 Live Operations Audit (${month})\n• **Coverage Health**: **${toolResult?.coveragePercentage ?? 98}%**\n• **Active Staff**: ${toolResult?.totals?.employees ?? 32} across ${toolResult?.totals?.pods ?? 6} pods\n• **Conflicts**: ${toolResult?.conflicts?.blockingCount ?? 0} blocking / ${toolResult?.conflicts?.warningCount ?? 0} warnings.`;
-      }
+      const error = apiKey
+        ? "The assistant provider did not return a response. Please try again."
+        : "The assistant is not configured. Set GROQ_API_KEY or ANTHROPIC_API_KEY to enable it.";
+      return NextResponse.json({ error, reply: error }, { status: 503 });
     }
-
     return NextResponse.json({
       reply: replyText,
       toolUsed,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
-import { parseWorkbookBuffer } from "@/lib/import/parse";
+import { parseImportFileBuffer } from "@/lib/import/parse";
 import { validateWorkbook, computeEntityDiff } from "@/lib/import/validate";
 import { ImportDiff } from "@/lib/import/types";
 import { formatDateOnly } from "@/lib/date-utils";
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
 
     if (!file) {
       return NextResponse.json(
-        { ok: false, errors: [{ sheet: "File", row: 0, field: "file", message: "No Excel file uploaded" }] },
+        { ok: false, errors: [{ sheet: "File", row: 0, field: "file", message: "No CSV or Excel file uploaded" }] },
         { status: 400 }
       );
     }
@@ -28,7 +28,8 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // 1. Parse buffer and check sheet/header structure
-    const parseResult = parseWorkbookBuffer(buffer);
+    const isCsvImport = file.name.toLowerCase().endsWith(".csv");
+    const parseResult = parseImportFileBuffer(buffer, file.name);
     if (!parseResult.ok || !parseResult.data) {
       const formattedErrors = (parseResult.errors || ["Failed to parse file"]).map((msg) => ({
         sheet: "Structure",
@@ -185,11 +186,16 @@ export async function POST(req: NextRequest) {
       leaves: leavesDiff,
       holidays: holidaysDiff,
     };
+    if (isCsvImport) {
+      for (const entityDiff of Object.values(diff)) entityDiff.removed = 0;
+    }
 
     return NextResponse.json({
       ok: true,
       filename: file.name,
       fileSize: file.size,
+      targetMonth: data.target_month || null,
+      importMode: isCsvImport ? "merge" : "replace",
       rowCounts: validation.rowCounts,
       errors: [],
       warnings: validation.warnings,
