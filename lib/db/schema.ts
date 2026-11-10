@@ -34,6 +34,27 @@ export const rosterDayStatusEnum = pgEnum("roster_day_status", [
   "unassigned",
 ]);
 export const conflictSeverityEnum = pgEnum("conflict_severity", ["blocking", "warning"]);
+export const importStatusEnum = pgEnum("import_status", ["previewed", "committed", "failed"]);
+
+// 0. Imports (File tracking & rollback)
+export const imports = pgTable(
+  "imports",
+  {
+    id: text("id").primaryKey(),
+    filename: text("filename").notNull(),
+    uploadedBy: text("uploaded_by"),
+    uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+    status: importStatusEnum("status").default("previewed").notNull(),
+    rowCounts: jsonb("row_counts"),
+    errorSummary: jsonb("error_summary"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("imports_status_idx").on(table.status),
+    index("imports_uploaded_at_idx").on(table.uploadedAt),
+  ]
+);
 
 // 1. Pods (Defined early for foreign keys)
 export const pods = pgTable(
@@ -56,6 +77,7 @@ export const employees = pgTable(
     name: text("name").notNull(),
     email: text("email").notNull().unique(),
     podId: text("pod_id").references(() => pods.id),
+    importId: text("import_id").references(() => imports.id),
     active: boolean("active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -63,6 +85,7 @@ export const employees = pgTable(
   (table) => [
     index("employees_pod_id_idx").on(table.podId),
     index("employees_email_idx").on(table.email),
+    index("employees_import_id_idx").on(table.importId),
   ]
 );
 
@@ -90,11 +113,16 @@ export const brands = pgTable(
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
+    code: text("code").unique(),
+    category: text("category"),
     active: boolean("active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
-  (table) => [index("brands_name_idx").on(table.name)]
+  (table) => [
+    index("brands_name_idx").on(table.name),
+    uniqueIndex("brands_code_idx").on(table.code),
+  ]
 );
 
 // 5. Processes
@@ -128,6 +156,8 @@ export const brandProcesses = pgTable(
     minHeadcountSunday: integer("min_headcount_sunday").default(0).notNull(),
     minHeadcountHoliday: integer("min_headcount_holiday").default(0).notNull(),
     customScheduleConfig: jsonb("custom_schedule_config"), // e.g. { activeDays: [1,2,3,4,5], noHolidays: true }
+    importId: text("import_id").references(() => imports.id),
+    active: boolean("active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -135,6 +165,7 @@ export const brandProcesses = pgTable(
     unique("brand_process_unique").on(table.brandId, table.processId),
     index("bp_brand_idx").on(table.brandId),
     index("bp_process_idx").on(table.processId),
+    index("bp_import_idx").on(table.importId),
   ]
 );
 
@@ -153,12 +184,15 @@ export const assignments = pgTable(
     endDate: date("end_date"),
     priority: integer("priority").default(1).notNull(),
     isExclusive: boolean("is_exclusive").default(false).notNull(),
+    importId: text("import_id").references(() => imports.id),
+    active: boolean("active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [
     index("assign_emp_idx").on(table.employeeId),
     index("assign_bp_idx").on(table.brandProcessId),
+    index("assign_import_idx").on(table.importId),
   ]
 );
 

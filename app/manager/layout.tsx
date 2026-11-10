@@ -12,6 +12,7 @@ import {
   CheckSquare,
   Database,
   BarChart3,
+  FileSpreadsheet,
   Sparkles,
   LogOut,
   Menu,
@@ -66,6 +67,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
     { label: "Roster Grid", href: `/manager/roster/${currentMonth}`, icon: Grid3X3 },
     { label: "Dimensions View", href: "/manager/views", icon: Layers },
     { label: "Analytics", href: "/manager/analytics", icon: BarChart3 },
+    { label: "Excel Import", href: "/manager/import", icon: FileSpreadsheet },
     { label: "Approvals Queue", href: "/manager/approvals", icon: CheckSquare },
     { label: "Master Data", href: "/manager/master", icon: Database },
   ];

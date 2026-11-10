@@ -32,8 +32,9 @@ The platform serves three user roles across two integrated interfaces:
 - **Authentication**: Auth.js (NextAuth v5 beta) with credentials provider, bcrypt password hashing, and role-based middleware (`manager`, `pod_lead`, `employee`)
 - **Data Synchronization**: SWR with 20s polling interval (`refreshInterval: 20000`), `revalidateOnFocus`, optimistic UI, and conflict toast notifications
 - **Scheduler Engine**: Pure TypeScript greedy deterministic engine (`lib/scheduler/`) with 0 external solver dependencies
-- **Unit Testing**: Vitest test suite (`npm run test`) verifying hard constraints, scarcity sorting, and replan logic
-- **AI Assistant**: Anthropic Claude Messages API / Groq LLM with read-only tool calling (`get_conflicts`, `get_coverage`, `find_backups`, `get_employee_schedule`)
+- **Unit Testing**: Vitest test suite (`npm run test`) verifying hard constraints, scarcity sorting, replan logic, and Excel import validation
+- **Dynamic Excel Import**: SheetJS (`xlsx`) ingestion pipeline with strict Zod validation, referential integrity graph checks, database diff engine, and rollback support
+- **AI Assistant**: Anthropic Claude Messages API / Groq LLM with 17 live PostgreSQL-backed tools (`get_import_summary`, `list_brands`, `list_processes`, `get_pod_members`, `get_conflicts`, `find_backups`, etc.)
 
 ---
 
@@ -176,4 +177,61 @@ The application has been verified against the complete acceptance scenario:
 4. **Replan & Backup Suggestion**: Approving a leave in `/manager/approvals` simulates the impact on future unpinned days, preserves past days, and surfaces cross-trained colleagues (Rahul Verma, Sneha Rao).
 5. **AI Assistant Introspection**: Asked *"Who covers NDR on Sunday 15 Nov?"*, the assistant executes read-only tool introspection and provides available cross-trained options.
 6. **Role Isolation in Employee Portal**: Logging in as Priya (`/me`) displays strictly her personal calendar, approved leaves, and leave request form, with zero access to company-wide rosters or other employee data.
+
+---
+
+## 8. Dynamic Excel Import System
+
+To replace hardcoded seeds with real operational data, the platform provides a complete **Excel Ingestion Pipeline** at `/manager/import`:
+
+### 1. Workbook Structure & Template (8 Sheets)
+Download the official template directly from `GET /api/import/template` or the Import page:
+
+| Sheet | Columns (Exact snake_case) | Description |
+| :--- | :--- | :--- |
+| **`Pods`** | `pod_code`, `pod_name`, `lead_employee_id` | Operational pods and designated pod leads. |
+| **`Employees`** | `employee_id`, `name`, `email`, `pod_code`, `weekly_off_day`, `active` | 30+ team members with mandatory off days (`MON`–`SUN`). |
+| **`Brands`** | `brand_code`, `brand_name`, `category` | D2C client brands and industry categories. |
+| **`Processes`** | `process_code`, `process_name` | Operational functions (`CS`, `ACC`, `RET`, `NDR`). |
+| **`Schedules`** | `brand_code`, `process_code`, `operating_calendar`, `weekday_headcount`, `sunday_headcount`, `holiday_headcount`, `min_staff_required` | Brand operating rules and headcount targets (`all_365`, `daily_no_holidays`, `mon_sat_no_holidays`, `custom`). |
+| **`Assignments`** | `employee_id`, `brand_code`, `process_code`, `valid_from`, `valid_to`, `priority`, `is_exclusive` | Staff eligibility mapping with priority and exclusivity. |
+| **`Leaves`** | `employee_id`, `date_from`, `date_to`, `type`, `status` | Planned/sick leaves and comp-offs (`approved` or `pending`). |
+| **`Holidays`** | `date`, `name` | Public holidays for the roster calendar. |
+
+### 2. Validation & Referential Integrity Engine
+- **Structural Integrity**: Missing sheets or missing column headers reject the file immediately with exact missing names.
+- **Data Normalization**: Automatic string trimming, code uppercasing, boolean normalization (`TRUE/FALSE/yes/no/1/0`), and strict `YYYY-MM-DD` date parsing.
+- **Zod Row-Level Validation**: Collects **all** errors with `{ sheet, row, field, message }` without early abort.
+- **Referential Integrity**:
+  - `pod_code` in Employees must exist in Pods.
+  - `lead_employee_id` in Pods must exist in Employees and belong to that exact pod.
+  - `brand_code` and `process_code` in Schedules and Assignments must exist in Brands and Processes.
+  - `employee_id` in Assignments and Leaves must exist in Employees.
+  - `valid_to >= valid_from` and `date_to >= date_from`.
+  - Primary keys unique in every sheet.
+  - Overlapping assignments for the same employee, brand, and process are flagged.
+  - **Hard Blocker**: Any schedule with 0 eligible assigned employees blocks preview.
+- **Warnings**: Identifies single-resource brands and processes where eligible headcount < required headcount.
+
+### 3. Preview & Atomic Commit Workflow
+1. **Preview (`POST /api/import/preview`)**: Evaluates the uploaded workbook, runs entity diffs (`+Added`, `~Changed`, `-Removed`, `=Unchanged`) against PostgreSQL, and writes **zero** records.
+2. **Commit (`POST /api/import/commit`)**:
+   - Re-validates within a single atomic database transaction.
+   - Upserts on natural keys (`employee_id`, `pod_code`, `brand_code`, `process_code`).
+   - Soft-deletes unreferenced rows using `active = false` scoped to `import_id`.
+   - Records metadata and row counts in the `imports` table.
+   - Automatically triggers the deterministic scheduler to solve and regenerate the roster for the affected month.
+   - Idempotent: re-uploading an earlier file cleanly restores that historical state.
+
+---
+
+## 9. Assumptions Section
+
+1. **Operating Month Scope**: Rosters are generated on a monthly cycle (default `2026-11`), while master data (employees, brands, processes, schedules) spans across months.
+2. **Natural Keys**: Entities are uniquely identified by natural codes (`employee_id`, `pod_code`, `brand_code`, `process_code`) rather than arbitrary names.
+3. **Weekly-Off Policy**: Every active employee has 1 designated weekly rest day per calendar week. In high-demand scenarios, the scheduler may adjust an employee's rest day to another day within the same week to satisfy mandatory coverage.
+4. **Consecutive Days Limit**: The scheduler enforces a hard limit of at most 6 consecutive working days without a rest day.
+5. **Deterministic Ties**: If multiple eligible employees have identical cost scores for a shift, ties are broken deterministically by `employee_id` sorting.
+6. **Import Idempotency**: Re-uploading an earlier workbook restores that exact master state and re-solves schedules without orphaned data.
+
 

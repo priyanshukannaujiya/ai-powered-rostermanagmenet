@@ -183,15 +183,55 @@ const toolsDefinition = [
   {
     type: "function",
     function: {
-      name: "query_database_custom",
-      description: "Query structural database information regarding pods, brands, operating calendars, or public holidays.",
+      name: "get_import_summary",
+      description: "Get metadata and row statistics of recent dynamic Excel imports, including filename, uploaded_by, status, row_counts, and timestamp.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_brands",
+      description: "List all active D2C client brands from the database with categories, assigned processes, and assigned team members.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_processes",
+      description: "List all business processes (e.g. CS, ACC, RET, NDR) and their operating requirements.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_pod_members",
+      description: "List members, emails, and lead for a specified pod code (e.g. 'POD_ALPHA') or pod name.",
       parameters: {
         type: "object",
         properties: {
-          entity: { type: "string", enum: ["pods", "brands", "holidays", "overview"], description: "Entity to inspect" },
+          pod_code_or_name: { type: "string", description: "Pod code (e.g. 'POD_ALPHA') or name" },
         },
-        required: ["entity"],
+        required: ["pod_code_or_name"],
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_import_errors",
+      description: "Get validation warnings and error summary from the most recent workbook upload attempt.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_latest_import",
+      description: "Retrieve the active import ID, filename, and commit timestamp for the current live database state.",
+      parameters: { type: "object", properties: {} },
     },
   },
 ];
@@ -207,6 +247,16 @@ async function executeTool(
   const sql = neon(process.env.DATABASE_URL!);
   const month = args.month || "2026-11";
   const monthId = `roster-${month}`;
+
+  // Check active import state
+  const latestImports = await sql`
+    SELECT id, filename, uploaded_at, status, row_counts, error_summary 
+    FROM imports 
+    WHERE status = 'committed'
+    ORDER BY uploaded_at DESC 
+    LIMIT 1;
+  `;
+  const activeImportId = latestImports[0]?.id || null;
 
   switch (toolName) {
     // 1. Comprehensive System Health & Operations Analysis
@@ -1220,8 +1270,121 @@ async function executeTool(
             (SELECT COUNT(*) FROM brands) as total_brands,
             (SELECT COUNT(*) FROM leaves WHERE status = 'pending') as pending_leaves;
         `;
-        return { counts: counts[0] };
+        return { counts: counts[0], active_import_id: activeImportId };
       }
+    }
+
+    // 12. get_import_summary
+    case "get_import_summary": {
+      const recentImports = await sql`
+        SELECT id, filename, uploaded_by, uploaded_at, status, row_counts, error_summary
+        FROM imports
+        ORDER BY uploaded_at DESC
+        LIMIT 5;
+      `;
+      return {
+        active_import_id: activeImportId,
+        latestImport: recentImports[0] || null,
+        history: recentImports,
+        has_imported_data: Boolean(recentImports[0]),
+      };
+    }
+
+    // 13. list_brands
+    case "list_brands": {
+      const brandsList = await sql`
+        SELECT b.id, b.code, b.name, b.category, b.active,
+               COUNT(DISTINCT bp.id) as active_processes,
+               COUNT(DISTINCT a.employee_id) as assigned_staff
+        FROM brands b
+        LEFT JOIN brand_processes bp ON bp.brand_id = b.id AND bp.active = true
+        LEFT JOIN assignments a ON a.brand_process_id = bp.id AND a.active = true
+        WHERE b.active = true
+        GROUP BY b.id, b.code, b.name, b.category, b.active
+        ORDER BY b.name;
+      `;
+      return {
+        active_import_id: activeImportId,
+        totalBrands: brandsList.length,
+        brands: brandsList,
+      };
+    }
+
+    // 14. list_processes
+    case "list_processes": {
+      const procList = await sql`
+        SELECT p.id, p.code, p.name,
+               COUNT(DISTINCT bp.brand_id) as brands_using_process
+        FROM processes p
+        LEFT JOIN brand_processes bp ON bp.process_id = p.id AND bp.active = true
+        GROUP BY p.id, p.code, p.name
+        ORDER BY p.code;
+      `;
+      return {
+        active_import_id: activeImportId,
+        processes: procList,
+      };
+    }
+
+    // 15. get_pod_members
+    case "get_pod_members": {
+      const queryStr = String(args.pod_code_or_name || "").trim().toLowerCase();
+      const podsFound = await sql`
+        SELECT p.id as pod_code, p.name as pod_name, p.lead_employee_id, lead.name as lead_name
+        FROM pods p
+        LEFT JOIN employees lead ON p.lead_employee_id = lead.id
+        WHERE LOWER(p.id) = ${queryStr} 
+           OR LOWER(p.name) LIKE ${`%${queryStr}%`}
+        LIMIT 1;
+      `;
+      if (podsFound.length === 0) {
+        return { active_import_id: activeImportId, error: `No pod found matching "${args.pod_code_or_name}"` };
+      }
+      const pod = podsFound[0];
+      const members = await sql`
+        SELECT id as employee_id, name, email, active
+        FROM employees
+        WHERE pod_id = ${pod.pod_code}
+        ORDER BY name;
+      `;
+      return {
+        active_import_id: activeImportId,
+        pod_code: pod.pod_code,
+        pod_name: pod.pod_name,
+        lead_name: pod.lead_name,
+        member_count: members.length,
+        members,
+      };
+    }
+
+    // 16. get_import_errors
+    case "get_import_errors": {
+      const latest = await sql`
+        SELECT id, filename, uploaded_at, status, error_summary, row_counts
+        FROM imports
+        ORDER BY uploaded_at DESC
+        LIMIT 1;
+      `;
+      if (latest.length === 0) {
+        return { active_import_id: null, message: "No imports have been performed yet." };
+      }
+      return {
+        active_import_id: latest[0].id,
+        filename: latest[0].filename,
+        uploaded_at: latest[0].uploaded_at,
+        status: latest[0].status,
+        error_summary: latest[0].error_summary,
+        row_counts: latest[0].row_counts,
+      };
+    }
+
+    // 17. get_latest_import
+    case "get_latest_import": {
+      return {
+        active_import_id: activeImportId,
+        import: latestImports[0] || null,
+        has_imported_data: Boolean(latestImports[0]),
+      };
     }
 
     default:
@@ -1254,10 +1417,20 @@ export async function POST(req: NextRequest) {
     .map((k) => k.trim())
     .find((k) => k.startsWith("gsk_") || k.startsWith("sk-")) || "";
 
+  const sql = neon(process.env.DATABASE_URL!);
+  const latestImportRec = await sql`SELECT id, filename, uploaded_at, status FROM imports WHERE status = 'committed' ORDER BY uploaded_at DESC LIMIT 1;`;
+  const activeImportId = latestImportRec[0]?.id || null;
+
   const systemPrompt = `You are the AI Operations Intelligence Copilot for the Smart Roster Management System.
 You are directly connected to the LIVE PostgreSQL database and deterministic scheduling graph.
 User session: ${user!.email} (Role: ${user!.role})
 Current month cycle: ${month}
+Active Workbook Import: ${activeImportId ? `${activeImportId} (${latestImportRec[0].filename})` : "Default Seeded State"}
+
+Database-Driven Guidelines:
+- Answer ONLY from tools that query the live database, never invent or hallucinate data.
+- If asked about brands, employees, pods, or schedules and the database has no records or no import is active, state: "No dynamic roster data is currently loaded. Please upload a roster workbook via the Excel Import page."
+- Trace operational insights back to the active import (${activeImportId || "seeded"}).
 
 Core End-to-End Operational Workflow for Leave Inquiries & Shift Appointments:
 1. When asked if there are any leave applications ("is there any leave application", "pending leave", "who applied for leave"):
