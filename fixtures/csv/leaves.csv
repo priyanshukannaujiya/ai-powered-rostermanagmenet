@@ -1,0 +1,5 @@
+employee_id,date_from,date_to,type,status
+EMP_001,2026-11-25,2026-11-25,leave,approved
+EMP_006,2026-11-15,2026-11-16,leave,approved
+EMP_006,2026-11-20,2026-11-21,leave,pending
+EMP_011,2026-11-18,2026-11-20,leave,pending

@@ -1,0 +1,17 @@
+brand_code,process_code,operating_calendar,weekday_headcount,sunday_headcount,holiday_headcount,min_staff_required
+LUMORA,CS,all_365,1,1,1,1
+LUMORA,ACC,daily_no_holidays,1,1,0,1
+BREWHAUS,CS,all_365,1,1,1,1
+BREWHAUS,NDR,mon_sat_no_holidays,1,0,0,1
+NESTWELL,NDR,mon_sat_no_holidays,1,0,0,1
+TREKKR,RET,mon_sat_no_holidays,1,0,0,1
+AURA_GLOW,CS,all_365,1,1,1,1
+URBAN_BOTANICS,ACC,daily_no_holidays,1,1,0,1
+DAILY_GREENS,CS,all_365,1,1,1,1
+ZEN_LIFESTYLE,RET,mon_sat_no_holidays,1,0,0,1
+VELVET_THREAD,CS,all_365,1,1,1,1
+KICKS_CO,ACC,daily_no_holidays,1,1,0,1
+PULSE_NUTRITION,CS,all_365,1,1,1,1
+PULSE_NUTRITION,NDR,mon_sat_no_holidays,1,0,0,1
+BLOOM_BABY,CS,all_365,1,1,1,1
+BLOOM_BABY,RET,mon_sat_no_holidays,1,0,0,1

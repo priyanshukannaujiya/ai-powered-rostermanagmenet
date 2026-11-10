@@ -1,0 +1,7 @@
+pod_code,pod_name,lead_employee_id
+POD_ALPHA,Alpha Pod (Beauty & Wellness),EMP_001
+POD_BETA,Beta Pod (Food & Beverages),EMP_006
+POD_GAMMA,Gamma Pod (Home & Living),EMP_011
+POD_DELTA,Delta Pod (Fashion & Apparel),EMP_017
+POD_EPSILON,Epsilon Pod (Fitness & Sports),EMP_022
+POD_ZETA,Zeta Pod (Baby & Kids),EMP_027
