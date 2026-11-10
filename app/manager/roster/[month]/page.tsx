@@ -269,17 +269,17 @@ export default function RosterGridPage({ params }: { params: { month: string } }
   const getStatusCellStyles = (status: string, isPinned?: boolean) => {
     switch (status) {
       case "working":
-        return "bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow-xs";
+        return "bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-xs border border-indigo-700/40";
       case "weekly_off":
-        return "bg-slate-100 text-slate-600 font-medium hover:bg-slate-200";
+        return "bg-slate-100 text-slate-600 font-semibold hover:bg-slate-200 border border-slate-300/60";
       case "leave":
-        return "bg-amber-400 text-amber-950 font-bold hover:bg-amber-500 shadow-xs";
+        return "bg-amber-400 text-amber-950 font-bold hover:bg-amber-500 shadow-xs border border-amber-500/50";
       case "holiday":
-        return "bg-rose-100 text-rose-800 font-semibold hover:bg-rose-200";
+        return "bg-rose-100 text-rose-800 font-bold hover:bg-rose-200 border border-rose-300/60";
       case "comp_off":
-        return "bg-teal-100 text-teal-800 font-semibold hover:bg-teal-200";
+        return "bg-teal-100 text-teal-800 font-bold hover:bg-teal-200 border border-teal-300/60";
       default:
-        return "bg-slate-50 text-slate-300 hover:bg-slate-100 border border-slate-200/40";
+        return "bg-slate-50 text-slate-300 hover:bg-slate-100 border border-slate-200/50";
     }
   };
 
@@ -448,15 +448,15 @@ export default function RosterGridPage({ params }: { params: { month: string } }
             }}
           />
         ) : (
-          <div className="overflow-x-auto max-h-[72vh] relative">
-            <table className="w-full text-xs text-left border-collapse table-fixed">
+          <div className="overflow-x-auto max-h-[72vh] relative bg-white rounded-2xl border border-slate-200 shadow-sm">
+            <table className="w-full text-xs text-left border-separate border-spacing-0 table-fixed">
               {/* Header */}
-              <thead className="bg-slate-100/95 text-slate-700 sticky top-0 z-30 backdrop-blur-md sticky-header-shadow">
+              <thead className="sticky top-0 z-40 bg-slate-100">
                 <tr>
-                  <th className="p-3 font-bold sticky left-0 bg-slate-100/95 z-40 w-[180px] min-w-[180px] max-w-[180px] border-r border-slate-200/80 sticky-column-shadow">
+                  <th className="p-3 font-bold sticky top-0 left-0 bg-slate-100 z-50 w-[190px] min-w-[190px] max-w-[190px] border-b border-r border-slate-200 text-slate-800">
                     Employee
                   </th>
-                  <th className="p-3 font-semibold sticky left-[180px] bg-slate-100/95 z-40 w-[140px] min-w-[140px] max-w-[140px] border-r border-slate-200/80 hidden sm:table-cell sticky-column-shadow">
+                  <th className="p-3 font-semibold sticky top-0 left-[190px] bg-slate-100 z-50 w-[140px] min-w-[140px] max-w-[140px] border-b border-r-2 border-r-slate-300 shadow-[4px_0_12px_-2px_rgba(15,23,42,0.12)] hidden sm:table-cell text-slate-800">
                     Pod
                   </th>
                   {daysInMonth.map((dateStr) => {
@@ -468,12 +468,12 @@ export default function RosterGridPage({ params }: { params: { month: string } }
                       <th
                         key={dateStr}
                         className={cn(
-                          "p-1.5 text-center font-bold w-[46px] min-w-[46px] border-r border-slate-200/80 transition-colors",
+                          "p-1.5 text-center font-bold w-[48px] min-w-[48px] sticky top-0 z-40 border-b border-r border-slate-200 transition-colors",
                           isSun
-                            ? "bg-amber-100/50 text-amber-950 font-extrabold"
+                            ? "bg-amber-100 text-amber-950 font-extrabold"
                             : isSat
-                            ? "bg-slate-200/50 text-slate-800"
-                            : "text-slate-700"
+                            ? "bg-slate-200 text-slate-800"
+                            : "bg-slate-50 text-slate-700"
                         )}
                       >
                         <div className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">
@@ -487,20 +487,20 @@ export default function RosterGridPage({ params }: { params: { month: string } }
               </thead>
 
               {/* Rows */}
-              <tbody className="divide-y divide-slate-100">
+              <tbody>
                 {filteredEmployees.map((emp: any) => (
-                  <tr key={emp.id} className="hover:bg-slate-50/60 transition-colors group">
-                    {/* Fixed Employee Column (180px) */}
-                    <td className="p-2.5 font-medium text-slate-900 sticky left-0 bg-white group-hover:bg-slate-50/90 z-20 w-[180px] min-w-[180px] max-w-[180px] border-r border-slate-200/80 whitespace-nowrap sticky-column-shadow transition-colors">
+                  <tr key={emp.id} className="hover:bg-slate-50 transition-colors group">
+                    {/* Fixed Employee Column (190px) */}
+                    <td className="p-2.5 font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-30 w-[190px] min-w-[190px] max-w-[190px] border-b border-r border-slate-200 whitespace-nowrap transition-colors">
                       <div className="font-bold text-xs text-slate-900 truncate">{emp.name}</div>
-                      <div className="text-[10px] text-slate-400 truncate max-w-[160px] font-mono">
+                      <div className="text-[10px] text-slate-400 truncate max-w-[165px] font-mono">
                         {emp.email}
                       </div>
                     </td>
 
-                    {/* Fixed Pod Column (140px at left-[180px]) */}
-                    <td className="p-2.5 text-slate-600 sticky left-[180px] bg-white group-hover:bg-slate-50/90 z-20 w-[140px] min-w-[140px] max-w-[140px] border-r border-slate-200/80 hidden sm:table-cell whitespace-nowrap text-[11px] sticky-column-shadow transition-colors">
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200/60 font-semibold text-slate-700 text-[10px] truncate block">
+                    {/* Fixed Pod Column (140px at left-[190px]) with drop shadow */}
+                    <td className="p-2.5 text-slate-600 sticky left-[190px] bg-white group-hover:bg-slate-50 z-30 w-[140px] min-w-[140px] max-w-[140px] border-b border-r-2 border-r-slate-300 shadow-[4px_0_12px_-2px_rgba(15,23,42,0.12)] hidden sm:table-cell whitespace-nowrap text-[11px] transition-colors">
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200/80 font-semibold text-slate-700 text-[10px] truncate block">
                         {emp.pod_name?.split("(")[0] || "Alpha Pod"}
                       </span>
                     </td>
@@ -511,12 +511,17 @@ export default function RosterGridPage({ params }: { params: { month: string } }
                       const status = cell?.status || "unassigned";
                       const isPinned = cell?.pinned;
                       const label = getStatusShortLabel(cell);
+                      const dow = new Date(dateStr).getDay();
+                      const isSun = dow === 0;
 
                       return (
                         <td
                           key={dateStr}
                           onClick={() => handleCellClick(emp, dateStr)}
-                          className="p-1 text-center border-r border-slate-100/80 cursor-pointer select-none w-[46px] min-w-[46px]"
+                          className={cn(
+                            "p-1 text-center border-b border-r border-slate-200/70 cursor-pointer select-none w-[48px] min-w-[48px] z-10 transition-colors",
+                            isSun ? "bg-amber-50/25 hover:bg-amber-100/40" : "bg-white hover:bg-slate-50"
+                          )}
                         >
                           <div
                             className={cn(
@@ -543,12 +548,12 @@ export default function RosterGridPage({ params }: { params: { month: string } }
               </tbody>
 
               {/* Headcount Totals Footer */}
-              <tfoot className="bg-slate-100/90 text-slate-800 sticky bottom-0 z-30 backdrop-blur-md border-t-2 border-slate-300 font-semibold">
+              <tfoot className="sticky bottom-0 z-40 bg-slate-100">
                 <tr>
-                  <td className="p-2.5 font-bold text-xs sticky left-0 bg-slate-100 z-40 w-[180px] min-w-[180px] max-w-[180px] border-r border-slate-200 sticky-column-shadow">
+                  <td className="p-2.5 font-bold text-xs sticky bottom-0 left-0 bg-slate-100 z-50 w-[190px] min-w-[190px] max-w-[190px] border-t-2 border-t-slate-300 border-r border-r-slate-200 text-slate-900">
                     Total Staff Working
                   </td>
-                  <td className="p-2.5 text-xs sticky left-[180px] bg-slate-100 z-40 w-[140px] min-w-[140px] max-w-[140px] border-r border-slate-200 hidden sm:table-cell sticky-column-shadow text-slate-500 font-mono">
+                  <td className="p-2.5 text-xs sticky bottom-0 left-[190px] bg-slate-100 z-50 w-[140px] min-w-[140px] max-w-[140px] border-t-2 border-t-slate-300 border-r-2 border-r-slate-300 shadow-[4px_0_12px_-2px_rgba(15,23,42,0.12)] hidden sm:table-cell text-slate-600 font-mono font-bold">
                     Headcount
                   </td>
                   {daysInMonth.map((dateStr) => {
@@ -559,8 +564,8 @@ export default function RosterGridPage({ params }: { params: { month: string } }
                       <td
                         key={dateStr}
                         className={cn(
-                          "p-1.5 text-center text-[11px] font-mono border-r border-slate-200 w-[46px] min-w-[46px]",
-                          isSun ? "bg-amber-100/40 text-amber-900 font-bold" : "text-slate-700"
+                          "p-1.5 text-center text-[11px] font-mono sticky bottom-0 z-40 border-t-2 border-t-slate-300 border-r border-r-slate-200 w-[48px] min-w-[48px]",
+                          isSun ? "bg-amber-100 text-amber-950 font-bold" : "bg-slate-100 text-slate-800 font-semibold"
                         )}
                         title={`Date ${dateStr}:\n${count?.working ?? 0} Working\n${count?.off ?? 0} Off\n${count?.leave ?? 0} On Leave`}
                       >

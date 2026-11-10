@@ -11,6 +11,7 @@ import {
   Layers,
   CheckSquare,
   Database,
+  BarChart3,
   Sparkles,
   LogOut,
   Menu,
@@ -64,6 +65,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
     { label: "Dashboard", href: "/manager", icon: LayoutDashboard },
     { label: "Roster Grid", href: `/manager/roster/${currentMonth}`, icon: Grid3X3 },
     { label: "Dimensions View", href: "/manager/views", icon: Layers },
+    { label: "Analytics", href: "/manager/analytics", icon: BarChart3 },
     { label: "Approvals Queue", href: "/manager/approvals", icon: CheckSquare },
     { label: "Master Data", href: "/manager/master", icon: Database },
   ];
