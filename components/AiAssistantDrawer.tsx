@@ -220,6 +220,7 @@ Click any quick-audit chip below or ask any operational query!`,
       // If a leave was approved or system data modified, trigger live client revalidation
       if (
         data?.toolUsed === "approve_leave" ||
+        data?.toolUsed === "assign_replacement_employee" ||
         data?.data?.systemReflected ||
         data?.data?.approved
       ) {
@@ -259,15 +260,15 @@ Click any quick-audit chip below or ask any operational query!`,
 
   // Categorized Quick Action Chips for Managers and Pod Leads
   const promptChips = [
+    { label: "Is there any leave application?", icon: FileCheck2, prompt: "Is there any leave application in the queue?" },
+    { label: "If I approve Priya's leave, any conflict?", icon: AlertTriangle, prompt: "If I approve Priya's leave is there any conflict for the client?" },
+    { label: "Who is available on Nov 20?", icon: Sparkles, prompt: "Is there any other employee available on that day to cover Brewhaus CS?" },
+    { label: "Assign Aarav to Brewhaus CS", icon: Check, prompt: "Assign Aarav Sharma to cover Brewhaus CS on Nov 20 and 21" },
     { label: "Approve Pending Leave", icon: FileCheck2, prompt: "Approve pending leave request and replan future shifts" },
-    { label: "Approve Priya's Leave", icon: Check, prompt: "Approve leave for Priya Patel" },
     { label: "Weekly-Off Equity & Fairness", icon: Users2, prompt: "Analyze employee preferences and fair weekly-off distribution across pods" },
     { label: "System Health Audit", icon: BarChart3, prompt: "Give me a full system health audit for November 2026" },
     { label: "Pod Workload & Capacity", icon: Users2, prompt: "Analyze pod workload, shift equity, and capacity distribution" },
     { label: "SPOF Risk Analysis", icon: AlertTriangle, prompt: "Which single-resource brands are at risk if staff take leave?" },
-    { label: "Pending Leave Queue", icon: FileCheck2, prompt: "Review pending leave requests and their replan impact" },
-    { label: "Explain Blocking Conflicts", icon: ShieldAlert, prompt: "Explain all blocking conflicts and suggested manager fixes" },
-    { label: "Who covers Brewhaus CS?", icon: Sparkles, prompt: "Who can cover Brewhaus CS on 15 Nov?" },
   ];
 
   if (!isOpen) return null;

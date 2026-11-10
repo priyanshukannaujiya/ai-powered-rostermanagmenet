@@ -332,6 +332,29 @@ export const auditLog = pgTable(
   ]
 );
 
+// 16. Notifications (Employee Portal Alerts)
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),
+    employeeId: text("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    type: text("type").default("shift_appointment").notNull(),
+    date: text("date"),
+    read: boolean("read").default(false).notNull(),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("notif_emp_idx").on(table.employeeId),
+    index("notif_read_idx").on(table.read),
+  ]
+);
+
 // Relations
 export const podsRelations = relations(pods, ({ many, one }) => ({
   employees: many(employees),

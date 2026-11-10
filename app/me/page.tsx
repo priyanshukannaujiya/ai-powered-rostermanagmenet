@@ -20,6 +20,7 @@ import {
   Briefcase,
   Coffee,
   Info,
+  Bell,
 } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
 import { Button } from "@/components/ui/Button";
@@ -46,6 +47,16 @@ export default function EmployeePortalPage() {
     }
   );
 
+  // SWR for employee notifications (shift appointments & alerts)
+  const { data: notifData, mutate: mutateNotifs } = useSWR(
+    "/api/notifications",
+    fetcher,
+    {
+      refreshInterval: 10000,
+      revalidateOnFocus: true,
+    }
+  );
+
   // SWR for employee's own schedule
   const { data: scheduleData, mutate: mutateSchedule, isLoading: scheduleLoading } = useSWR(
     `/api/assistant`,
@@ -61,15 +72,30 @@ export default function EmployeePortalPage() {
     }
   );
 
-  // Revalidate schedule and leaves when AI approves leaves
+  // Revalidate schedule and leaves when AI approves leaves or appoints shifts
   useEffect(() => {
     const handleRefresh = () => {
       mutateLeaves();
       mutateSchedule();
+      mutateNotifs();
     };
     window.addEventListener("roster:refresh", handleRefresh);
     return () => window.removeEventListener("roster:refresh", handleRefresh);
-  }, [mutateLeaves, mutateSchedule]);
+  }, [mutateLeaves, mutateSchedule, mutateNotifs]);
+
+  const handleAcknowledgeNotification = async (notifId: string) => {
+    try {
+      await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "mark_read", notificationId: notifId }),
+      });
+      mutateNotifs();
+      showToast({ type: "success", title: "Acknowledged", message: "Shift appointment notification marked as read." });
+    } catch (err: any) {
+      showToast({ type: "error", title: "Error", message: err.message });
+    }
+  };
 
   // Leave Request Form State
   const [startDate, setStartDate] = useState("2026-11-20");
@@ -199,6 +225,61 @@ export default function EmployeePortalPage() {
 
   return (
     <div className="space-y-6 animate-fade-in font-sans">
+      {/* Real-Time Shift Appointment & Coverage Notifications Banner */}
+      {notifData?.notifications && notifData.notifications.length > 0 && (
+        <div className="space-y-3">
+          {notifData.notifications.map((n: any) => (
+            <div
+              key={n.id}
+              className={cn(
+                "p-4 sm:p-5 rounded-3xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4",
+                !n.read
+                  ? "bg-gradient-to-r from-amber-50 via-amber-50/90 to-amber-100/80 border-amber-300 shadow-sm"
+                  : "bg-slate-50 border-slate-200 opacity-90"
+              )}
+            >
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div
+                  className={cn(
+                    "w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-sm",
+                    !n.read ? "bg-amber-600 text-white shadow-amber-600/30" : "bg-slate-200 text-slate-600"
+                  )}
+                >
+                  <Bell className={cn("w-5 h-5", !n.read && "animate-bounce")} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md",
+                        !n.read ? "bg-amber-200 text-amber-950 font-extrabold" : "bg-slate-200 text-slate-700"
+                      )}
+                    >
+                      {n.title || "Shift Appointment"}
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {new Date(n.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-semibold text-slate-900 mt-1">
+                    {n.message}
+                  </p>
+                </div>
+              </div>
+
+              {!n.read && (
+                <button
+                  onClick={() => handleAcknowledgeNotification(n.id)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all self-end sm:self-auto shrink-0 cursor-pointer"
+                >
+                  Acknowledge Shift
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Top Welcome & KPI Hero Card */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-card p-6 sm:p-7 relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
@@ -411,13 +492,31 @@ export default function EmployeePortalPage() {
                           <div className="mt-1 space-y-0.5">
                             {isWorking && (
                               <div>
-                                <div className="text-[10px] font-bold text-indigo-900 truncate" title={item.brand_name}>
-                                  {item.brand_name || "Assigned"}
-                                </div>
-                                {item.process_code && (
-                                  <span className="text-[9px] font-mono font-bold text-indigo-600 bg-indigo-100/80 px-1 py-0.2 rounded inline-block">
-                                    {item.process_code}
-                                  </span>
+                                {item.notes && item.notes.toLowerCase().includes("appointed") ? (
+                                  <div className="p-1 rounded-lg bg-amber-100/90 border border-amber-300 text-amber-950 text-[9px] font-bold leading-tight">
+                                    <span className="block text-[8px] uppercase tracking-wider text-amber-800 font-extrabold flex items-center gap-0.5">
+                                      ⭐ Appointed
+                                    </span>
+                                    <div className="truncate text-amber-900 font-bold" title={item.brand_name}>
+                                      {item.brand_name || "Client"}
+                                    </div>
+                                    {item.process_code && (
+                                      <span className="text-[8px] font-mono font-bold text-amber-800 bg-amber-200/90 px-1 py-0.2 rounded inline-block mt-0.5">
+                                        {item.process_code}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="text-[10px] font-bold text-indigo-900 truncate" title={item.brand_name}>
+                                      {item.brand_name || "Assigned"}
+                                    </div>
+                                    {item.process_code && (
+                                      <span className="text-[9px] font-mono font-bold text-indigo-600 bg-indigo-100/80 px-1 py-0.2 rounded inline-block">
+                                        {item.process_code}
+                                      </span>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             )}
@@ -477,9 +576,18 @@ export default function EmployeePortalPage() {
                                   {shift.process_code}
                                 </span>
                               )}
+                              {shift.notes && shift.notes.toLowerCase().includes("appointed") && (
+                                <span className="font-sans text-[10px] text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded-md font-bold flex items-center gap-1">
+                                  ⭐ Appointed Backup
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-slate-400 mt-0.5">
-                              {isWorking ? "Full Day Operational Shift" : "No active shifts scheduled"}
+                              {shift.notes && shift.notes.toLowerCase().includes("appointed")
+                                ? shift.notes
+                                : isWorking
+                                ? "Full Day Operational Shift"
+                                : "No active shifts scheduled"}
                             </div>
                           </div>
                         </div>
