@@ -60,7 +60,7 @@ Create a `.env` file in the root directory:
 
 ```env
 # Neon Serverless Postgres connection string
-DATABASE_URL=postgresql://user:password@ep-your-project-pooler.c-8.us-east-2.aws.neon.tech/neondb?sslmode=require
+DATABASE_URL=
 
 # Auth.js secret for JWT encryption (generate a unique random value of at least 32 characters)
 AUTH_SECRET=generate_a_unique_secret_of_at_least_32_characters
