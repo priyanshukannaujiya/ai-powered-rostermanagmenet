@@ -36,6 +36,23 @@ The platform serves three user roles across two integrated interfaces:
 - **Dynamic Import**: Preview-first CSV and Excel import workflows with validation, referential integrity checks, database diffing, and roster generation
 - **AI Assistant**: Anthropic Claude Messages API / Groq LLM with 17 live PostgreSQL-backed tools (`get_import_summary`, `list_brands`, `list_processes`, `get_pod_members`, `get_conflicts`, `find_backups`, etc.)
 
+### Technical side / language features
+
+This application is built as a full-stack operational system using modern JavaScript/TypeScript patterns instead of a static dashboard. The core technical strengths are:
+
+- **Next.js + TypeScript** for a scalable full-stack app architecture with typed API routes and reusable UI components
+- **React + Tailwind CSS** for a clean, responsive manager and employee experience
+- **PostgreSQL + Neon** for persistent storage of employees, pods, rules, roster month data, conflicts, approvals, and assignments
+- **Role-based auth and permission gates** so managers, pod leads, and employees only access the data they are authorized to see
+- **Server-side validation and business rules** to prevent invalid assignments, blocked leave approvals, and roster publishing with unresolved blocking conflicts
+- **Deterministic roster engine** written in TypeScript for fair scheduling, coverage balancing, and explainable conflict resolution
+- **Live data refresh with SWR** so roster changes, approvals, and notifications update quickly across manager and employee pages
+- **AI assistant grounded in live records** using tool-calling against the database instead of relying on memory or unverified assumptions
+- **CSV/PDF export support** for manager use cases and interview/demo readiness
+- **Notification and approval workflow integration** for real-world operations management, where staff schedule changes must be visible to the employee portal after publication
+
+This project is not just a frontend UI — it combines scheduling logic, data validation, permission scopes, AI querying, and live operational workflows into a single production-style web app.
+
 ---
 
 ## 3. Accounts and First-Time Setup

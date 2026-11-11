@@ -441,13 +441,37 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
     assignmentList
   );
 
-  // Merge pre-solve and post-solve conflicts, avoiding duplicates by id
+  // Merge pre-solve and post-solve conflicts, but dedupe the same coverage shortage by date + brand/process.
+  // The same staffing gap can be reported by both the pre-solve capacity check and the post-solve validation,
+  // which produces duplicate cards in the UI. Keep the richer/backed suggestion and drop the redundant one.
   const conflictMap = new Map<string, ConflictItem>();
-  for (const c of preSolveConflicts) {
-    conflictMap.set(c.id, c);
-  }
-  for (const c of postSolveConflicts) {
-    conflictMap.set(c.id, c);
+  const chooseBetterConflict = (current: ConflictItem, next: ConflictItem) => {
+    const score = (c: ConflictItem) => {
+      const message = c.message ?? "";
+      const fix = c.suggestedFix ?? "";
+      return (
+        (message.includes("has 0 assigned employees") ? 12 : 0) +
+        (message.includes("assigned employees") ? 5 : 0) +
+        (message.includes("available") ? 3 : 0) +
+        (message.includes("backup") ? 2 : 0) +
+        (fix.includes("backup") ? 3 : 0) +
+        (fix.includes("Assign") ? 1 : 0) +
+        (message.length + fix.length)
+      );
+    };
+
+    return score(next) > score(current) ? next : current;
+  };
+
+  for (const c of [...preSolveConflicts, ...postSolveConflicts]) {
+    const isCoverageConflict = ["INSUFFICIENT_HEADCOUNT", "UNAVAILABLE_SOLE_RESOURCE"].includes(c.type);
+    const dedupeKey = isCoverageConflict ? `${c.date ?? "unknown"}|${c.brandProcessId ?? "unknown"}` : c.id;
+    const existing = conflictMap.get(dedupeKey);
+    if (!existing) {
+      conflictMap.set(dedupeKey, c);
+      continue;
+    }
+    conflictMap.set(dedupeKey, chooseBetterConflict(existing, c));
   }
 
   const allConflicts = Array.from(conflictMap.values());
