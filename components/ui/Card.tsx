@@ -9,7 +9,7 @@ export const Card: React.FC<CardProps> = ({ className, hover = false, ...props }
   return (
     <div
       className={cn(
-        "bg-white rounded-2xl border border-slate-200/80 shadow-card transition-all duration-200",
+        "bg-white rounded-2xl border border-slate-200/80 shadow-card transition-colors duration-200",
         hover && "hover:shadow-card-hover hover:border-slate-300/90",
         className
       )}
@@ -67,4 +67,3 @@ export const CardFooter: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
     />
   );
 };
-

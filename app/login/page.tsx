@@ -55,92 +55,93 @@ function LoginForm() {
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-14 items-center">
+    <div className="mx-auto grid w-full max-w-6xl grid-cols-1 items-stretch gap-6 lg:grid-cols-12 lg:gap-8">
       {/* Left Column: Professional Platform Overview */}
-      <div className="lg:col-span-6 xl:col-span-7 space-y-7 text-left">
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 p-7 text-left text-white shadow-xl shadow-slate-900/10 sm:p-9 lg:col-span-7 lg:p-10">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-indigo-500/15 blur-3xl" />
+        <div className="relative space-y-7">
         {/* Brand Header */}
         <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-600/20">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-indigo-200">
             <Calendar className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xl font-bold tracking-tight text-slate-900">
-                Smart Roster
-              </span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
+              <span className="text-xl font-bold tracking-tight text-white">Smart Roster</span>
+              <span className="rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-100">
                 Operations
               </span>
             </div>
-            <p className="text-xs text-slate-500 font-normal">
-              Workforce Operations & Shift Management System
-            </p>
+            <p className="text-sm text-slate-300">Workforce Operations & Shift Management System</p>
           </div>
         </div>
 
         {/* Headline */}
-        <div className="space-y-3">
-          <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 tracking-tight leading-snug">
-            Automated workforce scheduling and shift management.
+        <div className="max-w-2xl space-y-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">One workspace for every shift</p>
+          <h1 className="text-3xl font-bold leading-tight tracking-tight text-white sm:text-4xl xl:text-[2.75rem]">
+            Plan coverage with clarity. Keep every team in sync.
           </h1>
-          <p className="text-sm text-slate-600 leading-relaxed max-w-xl">
+          <p className="max-w-xl text-sm leading-6 text-slate-300 sm:text-base">
             Coordinate team capacity, enforce minimum staffing requirements, and manage shift schedules across multi-brand operations with real-time leave replanning.
           </p>
         </div>
 
         {/* System Capabilities Overview */}
-        <div className="space-y-3 pt-1">
-          <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-start gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5 border border-indigo-100">
+        <div className="grid gap-3 pt-1">
+          <div className="flex items-start gap-3.5 rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-indigo-200">
               <ShieldCheck className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-xs font-semibold text-slate-900">Constraint-Based Scheduling</h2>
-              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+              <h2 className="text-sm font-semibold text-white">Constraint-based scheduling</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-300">
                 Automatically verifies working limits, mandatory weekly rest periods, and brand coverage requirements.
               </p>
             </div>
           </div>
 
-          <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-start gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-100">
+          <div className="flex items-start gap-3.5 rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-emerald-200">
               <Clock className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-xs font-semibold text-slate-900">Real-Time Schedule Replanning</h2>
-              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+              <h2 className="text-sm font-semibold text-white">Responsive schedule replanning</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-300">
                 Approved leaves instantly recalculate future assignments while preserving pinned shifts and historical records.
               </p>
             </div>
           </div>
 
-          <div className="p-3.5 rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-start gap-3">
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5 border border-blue-100">
+          <div className="flex items-start gap-3.5 rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-sky-200">
               <Layers className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-xs font-semibold text-slate-900">Pod & Capacity Balancing</h2>
-              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+              <h2 className="text-sm font-semibold text-white">Connected teams and capacity</h2>
+              <p className="mt-1 text-sm leading-5 text-slate-300">
                 Distributes shifts evenly across operational pods to prevent employee fatigue and ensure balanced coverage.
               </p>
             </div>
           </div>
         </div>
 
-        <div className="pt-3 border-t border-slate-200 text-xs text-slate-500">
-          Your organization&apos;s employees, pods, brands, and schedules appear after the manager imports roster data.
+        <div className="border-t border-white/10 pt-4 text-sm leading-5 text-slate-300">
+          Sign in to view the schedules and operational data configured for your organization.
+        </div>
         </div>
       </div>
 
       {/* Right Column: Clean White Authentication Card */}
-      <div className="lg:col-span-6 xl:col-span-5 w-full">
-        <div className="bg-white border border-slate-200 rounded-2xl p-7 sm:p-8 shadow-xl shadow-slate-200/50 text-slate-900">
+      <div className="flex w-full items-center lg:col-span-5">
+        <div className="w-full rounded-3xl border border-slate-200 bg-white p-7 text-slate-900 shadow-xl shadow-slate-900/5 sm:p-9">
           {/* Form Header */}
-          <div className="mb-6">
-            <h2 className="text-xl font-bold tracking-tight text-slate-900">
-              Sign In
+          <div className="mb-7">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-indigo-600">Secure workspace access</p>
+            <h2 className="text-2xl font-bold tracking-tight text-slate-950">
+              Sign in to your portal
             </h2>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="mt-2 text-sm leading-5 text-slate-500">
               Enter your work email and password to access the portal.
             </p>
           </div>
@@ -155,7 +156,7 @@ function LoginForm() {
           {/* Form */}
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label className="mb-2 block text-sm font-semibold text-slate-700">
                 Work Email
               </label>
               <div className="relative">
@@ -167,7 +168,7 @@ function LoginForm() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 transition-colors shadow-xs"
+                  className="h-12 w-full rounded-xl border border-slate-300 bg-white pl-10 pr-3.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
                   placeholder="name@opscompany.com"
                 />
               </div>
@@ -175,7 +176,7 @@ function LoginForm() {
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold text-slate-700">
+                <label className="block text-sm font-semibold text-slate-700">
                   Password
                 </label>
               </div>
@@ -188,7 +189,7 @@ function LoginForm() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 transition-colors shadow-xs"
+                  className="h-12 w-full rounded-xl border border-slate-300 bg-white pl-10 pr-10 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
                 />
                 <button
                   type="button"
@@ -205,7 +206,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-xl text-sm font-semibold transition-colors duration-150 flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 mt-2 cursor-pointer"
+              className="mt-2 flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors duration-150 hover:bg-indigo-700 active:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? (
                 <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
@@ -220,12 +221,14 @@ function LoginForm() {
           </form>
 
           {/* Security & Access Info */}
-          <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5 text-slate-400" />
-              Role-Based Access Control
-            </span>
-            <span>PostgreSQL Protected</span>
+          <div className="mt-6 border-t border-slate-100 pt-4">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              <Shield className="h-4 w-4 text-emerald-600" />
+              Secure, role-based access
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              Accounts are provided by your organization. Contact your manager if you need access.
+            </p>
           </div>
         </div>
       </div>
@@ -235,9 +238,9 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-12 bg-slate-50 text-slate-900 relative">
+    <div className="relative flex min-h-screen items-center justify-center bg-slate-100 p-4 text-slate-900 sm:p-6 lg:p-10">
       {/* Subtle Clean Grid Pattern */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#e2e8f00a_1px,transparent_1px),linear-gradient(to_bottom,#e2e8f00a_1px,transparent_1px)] bg-[size:3rem_3rem] pointer-events-none" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(99,102,241,0.10),transparent_38%),linear-gradient(to_right,#cbd5e122_1px,transparent_1px),linear-gradient(to_bottom,#cbd5e122_1px,transparent_1px)] bg-[size:auto,3rem_3rem,3rem_3rem]" />
 
       <Suspense
         fallback={
@@ -247,7 +250,9 @@ export default function LoginPage() {
           </div>
         }
       >
-        <LoginForm />
+        <div className="relative z-10 w-full">
+          <LoginForm />
+        </div>
       </Suspense>
     </div>
   );

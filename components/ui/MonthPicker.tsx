@@ -23,13 +23,16 @@ export const MonthPicker: React.FC<MonthPickerProps> = ({
     onMonthChange(getMonthOffset(currentMonth, 1));
   };
 
-  const months = [
-    { value: "2026-09", label: "September 2026" },
-    { value: "2026-10", label: "October 2026" },
-    { value: "2026-11", label: "November 2026" },
-    { value: "2026-12", label: "December 2026" },
-    { value: "2027-01", label: "January 2027" },
-  ];
+  const selectedDate = new Date(`${currentMonth}-01T00:00:00.000Z`);
+  const monthAnchor = Number.isNaN(selectedDate.getTime()) ? new Date() : selectedDate;
+  const months = Array.from({ length: 25 }, (_, index) => {
+    const date = new Date(Date.UTC(monthAnchor.getUTCFullYear(), monthAnchor.getUTCMonth() + index - 12, 1));
+    const value = date.toISOString().slice(0, 7);
+    return {
+      value,
+      label: date.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+    };
+  });
 
   return (
     <div
@@ -76,4 +79,3 @@ export const MonthPicker: React.FC<MonthPickerProps> = ({
     </div>
   );
 };
-
