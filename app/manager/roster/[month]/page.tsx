@@ -31,7 +31,7 @@ import { MonthPicker } from "@/components/ui/MonthPicker";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatMonthYear, parseDateString, cn } from "@/lib/utils";
-import { dashboardSWR } from "@/lib/swr-config";
+import { realtimeSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -43,7 +43,7 @@ export default function RosterGridPage({ params }: { params: { month: string } }
   const { data, error, isLoading, mutate } = useSWR(
     `/api/roster/${month}`,
     fetcher,
-    dashboardSWR
+    realtimeSWR
   );
 
   // Filters
@@ -85,7 +85,11 @@ export default function RosterGridPage({ params }: { params: { month: string } }
       mutate();
     };
     window.addEventListener("roster:refresh", handleRefresh);
-    return () => window.removeEventListener("roster:refresh", handleRefresh);
+    window.addEventListener("leave:refresh", handleRefresh);
+    return () => {
+      window.removeEventListener("roster:refresh", handleRefresh);
+      window.removeEventListener("leave:refresh", handleRefresh);
+    };
   }, [mutate]);
 
   useEffect(() => {
@@ -385,14 +389,34 @@ export default function RosterGridPage({ params }: { params: { month: string } }
         return;
       }
 
+      // Apply the authoritative day returned by the API to the SWR cache first, so
+      // the grid repaints instantly and never shows the superseded assignment.
+      if (json.day && data) {
+        const savedDay = json.day;
+        const remainingDays = (data.days || []).filter(
+          (d: any) =>
+            !(
+              d.employee_id === savedDay.employee_id &&
+              parseDateString(d.date)?.dateStr === savedDay.date
+            )
+        );
+        await mutate(
+          { ...data, days: [...remainingDays, savedDay] },
+          { revalidate: true }
+        );
+      } else {
+        await mutate();
+      }
+
       showToast({
-        type: "success",
+        type: json.notificationWarning ? "warning" : "success",
         title: "Shift Assignment Saved",
-        message: `Updated ${editingCell.employeeName} on ${editingCell.date} to ${newStatus}.`,
+        message:
+          json.notificationWarning ||
+          `Updated ${editingCell.employeeName} on ${editingCell.date} to ${newStatus}.`,
       });
 
       setEditModalOpen(false);
-      mutate();
       window.dispatchEvent(new CustomEvent("roster:refresh"));
     } catch (err: any) {
       setEditError(err.message);

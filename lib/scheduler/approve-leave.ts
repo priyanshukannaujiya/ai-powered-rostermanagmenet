@@ -14,6 +14,12 @@ import {
 } from "./types";
 import { formatDateOnly } from "@/lib/date-utils";
 import { createEmployeeNotification } from "@/lib/notifications/create";
+import {
+  APPROVED_LEAVE_NOTE,
+  enumerateDateRange,
+  groupDatesByMonth,
+  isDateOnApprovedLeave,
+} from "./leave-days";
 
 export interface ApproveLeaveParams {
   leaveId: string;
@@ -263,24 +269,71 @@ export async function approveLeaveAndReplan({
   }
 
   // 5. Commit to database
+  const leaveDates = enumerateDateRange(startDate, endDate);
+  const leaveDatesByMonth = groupDatesByMonth(leaveDates);
+  const affectedMonthIds = Array.from(leaveDatesByMonth.keys()).map((m) => `roster-${m}`);
+
+  const generatedMonths = affectedMonthIds.length
+    ? await sql`
+        SELECT id, month FROM roster_months WHERE id = ANY(${affectedMonthIds});
+      `
+    : [];
+
+  // Brands the absent employee was covering, used verbatim in the notification.
+  const assignedBrandRows = await sql`
+    SELECT DISTINCT b.name as brand_name, p.code as process_code
+    FROM assignments a
+    JOIN brand_processes bp ON a.brand_process_id = bp.id
+    JOIN brands b ON bp.brand_id = b.id
+    JOIN processes p ON bp.process_id = p.id
+    WHERE a.employee_id = ${leave.employee_id} AND a.active = true
+    ORDER BY b.name ASC
+    LIMIT 5;
+  `;
+  const affectedBrands = assignedBrandRows.map((row: any) => ({
+    brandName: row.brand_name as string,
+    processCode: row.process_code as string,
+  }));
+
   await sql`
     UPDATE leaves
     SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = now(), updated_at = now()
     WHERE id = ${leaveId};
   `;
 
-  // Update unpinned future days
+  // Drop every re-plannable future day, then rebuild from the solver output.
   await sql`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND date >= ${startDate} AND pinned = false;`;
   await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
 
   for (const d of replanResult.updatedDays) {
-    if (d.date >= startDate) {
-      const rdId = `rd-${monthId}-${d.employeeId}-${d.date}-${d.brandProcessId || "none"}`;
+    if (d.date < startDate) continue;
+    // The absent employee's leave window is written deterministically below.
+    if (isDateOnApprovedLeave(d.date, d.employeeId, leave.employee_id, startDate, endDate)) continue;
+
+    const rdId = `rd-${monthId}-${d.employeeId}-${d.date}-${d.brandProcessId || "none"}`;
+    await sql`
+      INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
+      VALUES (${rdId}, ${monthId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now())
+      ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
+      DO UPDATE SET status = EXCLUDED.status, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
+    `;
+  }
+
+  // Pin the approved leave itself. Delete-then-insert removes any surviving
+  // working assignment for those dates so no duplicate/conflicting row remains.
+  for (const monthRecord of generatedMonths as Array<{ id: string; month: string }>) {
+    const datesForMonth = leaveDatesByMonth.get(monthRecord.month) || [];
+    for (const leaveDate of datesForMonth) {
+      await sql`
+        DELETE FROM roster_days
+        WHERE roster_month_id = ${monthRecord.id}
+          AND employee_id = ${leave.employee_id}
+          AND date = ${leaveDate};
+      `;
+      const leaveDayId = `rd-${monthRecord.id}-${leave.employee_id}-${leaveDate}-leave`;
       await sql`
         INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-        VALUES (${rdId}, ${monthId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now())
-        ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
-        DO UPDATE SET status = EXCLUDED.status, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
+        VALUES (${leaveDayId}, ${monthRecord.id}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now());
       `;
     }
   }
@@ -314,15 +367,29 @@ export async function approveLeaveAndReplan({
     );
   `;
 
+  const brandSummary = affectedBrands
+    .map((brand) => `${brand.brandName} (${brand.processCode})`)
+    .join(", ");
+  const approvalMessage = brandSummary
+    ? `Your leave request for ${startDate} to ${endDate} has been approved (status: approved). Your ${brandSummary} shifts on those dates are now recorded as approved leave.`
+    : `Your leave request for ${startDate} to ${endDate} has been approved (status: approved). Those dates are now recorded as approved leave in your roster.`;
+
   let notificationWarning: string | undefined;
   try {
     await createEmployeeNotification(sql, {
       employeeId: leave.employee_id,
       title: "Leave request approved",
-      message: `Your leave request for ${startDate} to ${endDate} has been approved.`,
+      message: approvalMessage,
       type: "leave_approved",
       date: startDate,
-      metadata: { leaveId, status: "approved" },
+      metadata: {
+        leaveId,
+        status: "approved",
+        startDate,
+        endDate,
+        leaveType: leave.type,
+        brands: affectedBrands,
+      },
       notifyPodLead: true,
     });
   } catch (notificationError) {

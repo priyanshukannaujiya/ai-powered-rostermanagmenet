@@ -29,9 +29,50 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatDate, parseDateString, cn } from "@/lib/utils";
-import { dashboardSWR, liveSWR } from "@/lib/swr-config";
+import { dashboardSWR, liveSWR, realtimeSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+/** Shape of one row from GET /api/me/schedule, mapped into the calendar view model. */
+interface ScheduleView {
+  cleanDate: string;
+  dayNum: number;
+  status: string;
+  brand_name: string | null;
+  brand_code: string | null;
+  process_code: string | null;
+  notes: string | null;
+  pendingLeave: boolean;
+  holidayName: string | null;
+}
+
+interface ApiScheduleDay {
+  date: string;
+  dayNum: number;
+  status: string;
+  brandName: string | null;
+  brandCode: string | null;
+  processCode: string | null;
+  notes: string | null;
+  holidayName: string | null;
+  pendingLeave: boolean;
+}
+
+interface ApiScheduleResponse {
+  success?: boolean;
+  month: string;
+  employee?: { id: string; name: string; email: string; podName: string | null };
+  schedule?: ApiScheduleDay[];
+  summary?: {
+    working: number;
+    weeklyOff: number;
+    leave: number;
+    holiday: number;
+    pendingLeave: number;
+    unassigned: number;
+  };
+  error?: string;
+}
 
 export default function EmployeePortalPage() {
   const { showToast } = useToast();
@@ -53,19 +94,20 @@ export default function EmployeePortalPage() {
     liveSWR
   );
 
-  // SWR for employee's own schedule
-  const { data: scheduleData, mutate: mutateSchedule, isLoading: scheduleLoading } = useSWR(
-    `/api/assistant`,
-    (url) =>
-      fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "get my schedule", month: currentMonth }),
-      }).then((res) => res.json()),
-    dashboardSWR
+  // Deterministic schedule: a direct DB read via GET /api/me/schedule.
+  // No LLM round-trip, so approvals and reassignments appear immediately.
+  const {
+    data: scheduleData,
+    mutate: mutateSchedule,
+    isLoading: scheduleLoading,
+    error: scheduleError,
+  } = useSWR<ApiScheduleResponse>(
+    `/api/me/schedule?month=${currentMonth}`,
+    fetcher,
+    realtimeSWR
   );
 
-  // Revalidate schedule and leaves when AI approves leaves or appoints shifts
+  // Revalidate schedule, leaves and notifications after any write anywhere.
   useEffect(() => {
     const handleRefresh = () => {
       mutateLeaves();
@@ -73,7 +115,11 @@ export default function EmployeePortalPage() {
       mutateNotifs();
     };
     window.addEventListener("roster:refresh", handleRefresh);
-    return () => window.removeEventListener("roster:refresh", handleRefresh);
+    window.addEventListener("leave:refresh", handleRefresh);
+    return () => {
+      window.removeEventListener("roster:refresh", handleRefresh);
+      window.removeEventListener("leave:refresh", handleRefresh);
+    };
   }, [mutateLeaves, mutateSchedule, mutateNotifs]);
 
   const handleAcknowledgeNotification = async (notifId: string) => {
@@ -108,57 +154,53 @@ export default function EmployeePortalPage() {
     return dates;
   }, [currentMonth]);
 
-  // Map API schedule records by clean YYYY-MM-DD
-  const rawScheduleList = scheduleData?.data?.schedule || [];
-  const scheduleByDate = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const item of rawScheduleList) {
-      const parsed = parseDateString(item.date);
-      if (parsed) {
-        if (parsed.dateStr.startsWith(currentMonth)) {
-          // Keep first occurrence to avoid duplicates
-          if (!map.has(parsed.dateStr)) {
-            map.set(parsed.dateStr, {
-              ...item,
-              cleanDate: parsed.dateStr,
-              dayNum: parsed.day,
-            });
-          }
-        }
-      }
-    }
-    return map;
-  }, [rawScheduleList, currentMonth]);
+  // The API already returns a gap-free calendar; map it into the view model.
+  const rawScheduleList = Array.isArray(scheduleData?.schedule) ? scheduleData!.schedule! : [];
 
-  // Unified canonical list of shifts for all 30 days
-  const canonicalMonthShifts = useMemo(() => {
+  const canonicalMonthShifts = useMemo<ScheduleView[]>(() => {
+    const byDate = new Map<string, ScheduleView>();
+    for (const day of rawScheduleList) {
+      const parsed = parseDateString(day.date);
+      if (!parsed || !parsed.dateStr.startsWith(currentMonth)) continue;
+      byDate.set(parsed.dateStr, {
+        cleanDate: parsed.dateStr,
+        dayNum: parsed.day,
+        status: day.status,
+        brand_name: day.brandName,
+        brand_code: day.brandCode,
+        process_code: day.processCode,
+        notes: day.notes,
+        pendingLeave: Boolean(day.pendingLeave),
+        holidayName: day.holidayName,
+      });
+    }
+    // Defensive: guarantee one entry per calendar day even if a row is missing.
     return allMonthDates.map((dateStr) => {
-      const dayNum = parseInt(dateStr.slice(8), 10);
-      const existing = scheduleByDate.get(dateStr);
-      if (existing) {
-        return existing;
-      }
+      const existing = byDate.get(dateStr);
+      if (existing) return existing;
       return {
         cleanDate: dateStr,
-        dayNum,
+        dayNum: parseInt(dateStr.slice(8), 10),
         status: "unassigned",
         brand_name: null,
+        brand_code: null,
         process_code: null,
+        notes: null,
+        pendingLeave: false,
+        holidayName: null,
       };
     });
-  }, [allMonthDates, scheduleByDate]);
+  }, [rawScheduleList, allMonthDates, currentMonth]);
 
   const workingShifts = canonicalMonthShifts.filter((s) => s.status === "working");
   const weeklyOffs = canonicalMonthShifts.filter((s) => s.status === "weekly_off");
   const approvedLeaves = canonicalMonthShifts.filter((s) => s.status === "leave");
 
-  // Employee Name
   const employeeName =
-    rawScheduleList[0]?.employee_name ||
+    scheduleData?.employee?.name ||
     leavesData?.leaves?.[0]?.employee_name ||
     "Employee";
-  const primaryBrand =
-    workingShifts[0]?.brand_name || "No assigned brand";
+  const primaryBrand = workingShifts[0]?.brand_name || "No assigned brand";
 
   const handleLeaveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,8 +226,11 @@ export default function EmployeePortalPage() {
           message: json.notificationWarning || "Your leave request has been submitted to your pod lead for review.",
         });
         setReason("");
+        // Force every employee-side cache to re-read the database.
         mutateLeaves();
         mutateNotifs();
+        mutateSchedule();
+        window.dispatchEvent(new CustomEvent("leave:refresh"));
       } else {
         showToast({
           type: "error",
@@ -486,7 +531,7 @@ export default function EmployeePortalPage() {
                                     <span className="block text-[8px] uppercase tracking-wider text-amber-800 font-extrabold flex items-center gap-0.5">
                                       ⭐ Appointed
                                     </span>
-                                    <div className="truncate text-amber-900 font-bold" title={item.brand_name}>
+                                    <div className="truncate text-amber-900 font-bold" title={item.brand_name ?? undefined}>
                                       {item.brand_name || "Client"}
                                     </div>
                                     {item.process_code && (
@@ -497,7 +542,7 @@ export default function EmployeePortalPage() {
                                   </div>
                                 ) : (
                                   <>
-                                    <div className="text-[10px] font-bold text-indigo-900 truncate" title={item.brand_name}>
+                                    <div className="text-[10px] font-bold text-indigo-900 truncate" title={item.brand_name ?? undefined}>
                                       {item.brand_name || "Assigned"}
                                     </div>
                                     {item.process_code && (
@@ -542,8 +587,8 @@ export default function EmployeePortalPage() {
                       >
                         <div className="flex items-center gap-3">
                           <div className="w-10 text-center">
-                            <span className="text-[10px] text-slate-400 uppercase font-semibold block">
-                              Nov
+            <span className="text-[10px] text-slate-400 uppercase font-semibold block">
+                              {new Date(year, monthNumber - 1).toLocaleDateString(undefined, { month: "short" })}
                             </span>
                             <span className="text-base font-bold text-slate-900 font-mono">
                               {shift.dayNum}

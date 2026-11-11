@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-import { dashboardSWR } from "@/lib/swr-config";
+import { realtimeSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -28,7 +28,20 @@ export default function DimensionViewsPage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [activeTab, setActiveTab] = useState<"brand" | "process" | "pod" | "employee">("brand");
 
-  const { data, isLoading } = useSWR(`/api/roster/${currentMonth}`, fetcher, dashboardSWR);
+  const { data, isLoading, mutate } = useSWR(`/api/roster/${currentMonth}`, fetcher, realtimeSWR);
+
+  // Reflect approvals and reassignments made elsewhere in the app immediately.
+  useEffect(() => {
+    const handleRefresh = () => {
+      mutate();
+    };
+    window.addEventListener("roster:refresh", handleRefresh);
+    window.addEventListener("leave:refresh", handleRefresh);
+    return () => {
+      window.removeEventListener("roster:refresh", handleRefresh);
+      window.removeEventListener("leave:refresh", handleRefresh);
+    };
+  }, [mutate]);
 
   const [selectedBrandId, setSelectedBrandId] = useState<string>("");
   const [selectedProcessCode, setSelectedProcessCode] = useState<string>("");
@@ -289,18 +302,46 @@ export default function DimensionViewsPage() {
 
                     <div className="space-y-2 text-xs">
                       {podEmployees.map((emp: any) => {
-                        const empWorking = days.filter(
-                          (d: any) => d.employee_id === emp.id && d.status === "working"
-                        ).length;
+                        const empDays = days.filter((d: any) => d.employee_id === emp.id);
+                        const empWorking = empDays.filter((d: any) => d.status === "working").length;
+                        const empOff = empDays.filter((d: any) => d.status === "weekly_off").length;
+                        const empLeaveDays = empDays.filter((d: any) => d.status === "leave");
                         return (
                           <div
                             key={emp.id}
-                            className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-none"
+                            className="py-2 border-b border-slate-50 last:border-none space-y-1"
                           >
-                            <span className="text-slate-800 font-semibold">{emp.name}</span>
-                            <span className="text-slate-500 font-mono text-[11px] bg-slate-50 px-2 py-0.5 rounded">
-                              {empWorking} shifts
-                            </span>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-800 font-semibold">{emp.name}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-500 font-mono text-[11px] bg-slate-50 px-2 py-0.5 rounded">
+                                  {empWorking} shifts
+                                </span>
+                                {empOff > 0 && (
+                                  <span className="text-slate-500 font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded">
+                                    {empOff} off
+                                  </span>
+                                )}
+                                {empLeaveDays.length > 0 && (
+                                  <span className="text-amber-950 font-mono text-[10px] bg-amber-200 border border-amber-300 px-1.5 py-0.5 rounded font-bold">
+                                    {empLeaveDays.length} leave
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {empLeaveDays.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {empLeaveDays.map((d: any) => (
+                                  <span
+                                    key={d.date}
+                                    className="text-[10px] font-bold text-amber-950 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded-md"
+                                    title={`${emp.name} approved leave on ${d.date}`}
+                                  >
+                                    Leave {d.date.slice(5)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         );
                       })}

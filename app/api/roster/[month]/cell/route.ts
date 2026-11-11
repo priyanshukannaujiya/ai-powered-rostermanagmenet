@@ -3,7 +3,7 @@ import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { z } from "zod";
-import { isAvailable } from "@/lib/scheduler/constraints";
+import { createEmployeeNotification } from "@/lib/notifications/create";
 
 export const dynamic = "force-dynamic";
 
@@ -48,10 +48,17 @@ export async function PUT(
 
     const { employeeId, date, status, brandProcessId, overrideReason, isOverride } = parsed.data;
 
+    if (date.slice(0, 7) !== month) {
+      return NextResponse.json(
+        { error: `Date ${date} is outside the selected roster month (${month}).` },
+        { status: 400 }
+      );
+    }
+
     const monthId = await ensureRosterMonth(sql, month);
 
-    // Server-side constraint validation
-    // If setting to 'working', verify employee is available (e.g. not on approved leave or comp-off)
+    // A working shift cannot be forced onto an employee who has approved leave
+    // on that date without an explicit manager override.
     if (status === "working") {
       const leaves = await sql`
         SELECT * FROM leaves
@@ -69,7 +76,7 @@ export async function PUT(
       }
     }
 
-    // Fetch existing cell state for audit log
+    // Snapshot the previous state for the audit trail and notification dedupe.
     const existing = await sql`
       SELECT * FROM roster_days
       WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date}
@@ -77,23 +84,48 @@ export async function PUT(
     `;
     const beforeState = existing[0] || null;
 
-    // Perform the update
-    const rdId = `rd-${monthId}-${employeeId}-${date}-${brandProcessId || "manual"}`;
+    // Delete-then-insert: the unique index includes a nullable brand_process_id,
+    // so an upsert alone would leave the previous assignment in place when the
+    // employee is reassigned to a different brand/process on the same date.
+    await sql`
+      DELETE FROM roster_days
+      WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date};
+    `;
+
+    const resolvedBrandProcessId = status === "working" ? brandProcessId || null : null;
+    const rdId = `rd-${monthId}-${employeeId}-${date}-${resolvedBrandProcessId || status}`;
     await sql`
       INSERT INTO roster_days (
         id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at
       )
       VALUES (
-        ${rdId}, ${monthId}, ${employeeId}, ${date}, ${status as any}, ${brandProcessId || null}, true, ${overrideReason || "Manual edit"}, now(), now()
-      )
-      ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
-      DO UPDATE SET status = EXCLUDED.status, pinned = true, notes = EXCLUDED.notes, updated_at = now();
+        ${rdId}, ${monthId}, ${employeeId}, ${date}, ${status as any}, ${resolvedBrandProcessId},
+        true, ${overrideReason || "Manual edit"}, now(), now()
+      );
     `;
 
-    // Clear stale conflict records for this month so resolved workarounds immediately unblock publication.
+    // Clear stale conflict records so resolved workarounds immediately unblock publication.
     await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
 
-    // Audit log
+    let brandName: string | null = null;
+    let brandCode: string | null = null;
+    let processCode: string | null = null;
+    if (resolvedBrandProcessId) {
+      const bpRows = await sql`
+        SELECT b.name as brand_name, b.code as brand_code, p.code as process_code
+        FROM brand_processes bp
+        JOIN brands b ON bp.brand_id = b.id
+        JOIN processes p ON bp.process_id = p.id
+        WHERE bp.id = ${resolvedBrandProcessId}
+        LIMIT 1;
+      `;
+      if (bpRows.length > 0) {
+        brandName = bpRows[0].brand_name || null;
+        brandCode = bpRows[0].brand_code || null;
+        processCode = bpRows[0].process_code || null;
+      }
+    }
+
     await sql`
       INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, before, after, created_at, updated_at)
       VALUES (
@@ -103,20 +135,63 @@ export async function PUT(
         'roster_days',
         ${rdId},
         ${JSON.stringify(beforeState)},
-        ${JSON.stringify({ employeeId, date, status, brandProcessId, overrideReason })},
+        ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, overrideReason })},
         now(),
         now()
       );
     `;
 
+    // Notify ONLY the employee whose own cell changed, and only when the
+    // assignment genuinely changed (repeated saves of the same shift stay quiet).
+    const isWorkingAssignment = status === "working" && Boolean(resolvedBrandProcessId);
+    const wasSameAssignment =
+      Boolean(beforeState) &&
+      beforeState.status === "working" &&
+      beforeState.brand_process_id === resolvedBrandProcessId;
+    let notificationWarning: string | undefined;
+
+    if (isWorkingAssignment && !wasSameAssignment) {
+      try {
+        await createEmployeeNotification(sql, {
+          employeeId,
+          title: "Shift assigned",
+          message: `You have been assigned to ${brandName || "a brand"}${processCode ? ` (${processCode})` : ""} on ${date}. Shift status: working.`,
+          type: "shift_assignment",
+          date,
+          metadata: {
+            employeeId,
+            date,
+            status,
+            brandProcessId: resolvedBrandProcessId,
+            brandName,
+            processCode,
+          },
+          notifyPodLead: false,
+        });
+      } catch (notificationError) {
+        console.error("Cell updated but notification delivery failed:", notificationError);
+        notificationWarning = "The cell was updated, but the employee notification could not be delivered.";
+      }
+    }
+
     return NextResponse.json({
       success: true,
       message: "Cell updated successfully and pinned",
-      updated: { employeeId, date, status, brandProcessId, pinned: true },
+      notificationWarning,
+      day: {
+        employee_id: employeeId,
+        date,
+        status,
+        brand_process_id: resolvedBrandProcessId,
+        brand_name: brandName,
+        brand_code: brandCode,
+        process_code: processCode,
+        pinned: true,
+        notes: overrideReason || "Manual edit",
+      },
     });
   } catch (error: any) {
     console.error("Cell update error:", error);
     return NextResponse.json({ error: error.message || "Failed to update cell" }, { status: 500 });
   }
 }
-
