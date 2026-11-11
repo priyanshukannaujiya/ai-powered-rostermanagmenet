@@ -20,6 +20,8 @@ import {
   Sparkles,
   User,
   SlidersHorizontal,
+  Download,
+  Printer,
 } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
 import { Button } from "@/components/ui/Button";
@@ -29,6 +31,7 @@ import { MonthPicker } from "@/components/ui/MonthPicker";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatMonthYear, parseDateString, cn } from "@/lib/utils";
+import { dashboardSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -40,10 +43,7 @@ export default function RosterGridPage({ params }: { params: { month: string } }
   const { data, error, isLoading, mutate } = useSWR(
     `/api/roster/${month}`,
     fetcher,
-    {
-      refreshInterval: 20000,
-      revalidateOnFocus: true,
-    }
+    dashboardSWR
   );
 
   // Filters
@@ -187,6 +187,7 @@ export default function RosterGridPage({ params }: { params: { month: string } }
           message: `Generated schedule for ${formatMonthYear(month)} with ${json.conflictsCount ?? 0} conflict(s). Review all conflicts before publishing.`,
         });
         mutate();
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
       } else {
         showToast({
           type: "error",
@@ -199,6 +200,139 @@ export default function RosterGridPage({ params }: { params: { month: string } }
     } finally {
       setGenerating(false);
     }
+  };
+
+  const exportRows = useMemo(() => {
+    if (!data?.days || !data?.meta?.employees) return [];
+    const employeeMap = new Map((data.meta.employees || []).map((emp: any) => [emp.id, emp]));
+    const rows: Array<{ date: string; employee: string; pod: string; status: string; brand: string; process: string; notes: string }> = [];
+
+    for (const emp of filteredEmployees) {
+      for (const date of daysInMonth) {
+        const cell = dayGridMap.get(`${emp.id}_${date}`);
+        rows.push({
+          date,
+          employee: emp.name,
+          pod: emp.pod_name || "Unassigned",
+          status: cell?.status || "unassigned",
+          brand: cell?.brand_name || "-",
+          process: cell?.process_code || "-",
+          notes: cell?.notes || "",
+        });
+      }
+    }
+
+    return rows;
+  }, [data, filteredEmployees, dayGridMap, daysInMonth]);
+
+  const escapeCsvValue = (value: string | number | null | undefined) => {
+    const text = String(value ?? "");
+    if (text.includes(",") || text.includes('"') || text.includes("\n")) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  };
+
+  const downloadRosterCsv = () => {
+    if (!exportRows.length) {
+      showToast({ type: "warning", title: "Nothing to export", message: "No roster rows match the current filters." });
+      return;
+    }
+
+    const headers = ["Date", "Employee", "Pod", "Status", "Brand", "Process", "Notes"];
+    const csv = [headers.join(",")]
+      .concat(
+        exportRows.map((row) =>
+          [
+            escapeCsvValue(row.date),
+            escapeCsvValue(row.employee),
+            escapeCsvValue(row.pod),
+            escapeCsvValue(row.status),
+            escapeCsvValue(row.brand),
+            escapeCsvValue(row.process),
+            escapeCsvValue(row.notes),
+          ].join(",")
+        )
+      )
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `roster-${month}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    showToast({ type: "success", title: "CSV ready", message: `Downloaded roster for ${formatMonthYear(month)}.` });
+  };
+
+  const downloadRosterPdf = () => {
+    if (!exportRows.length) {
+      showToast({ type: "warning", title: "Nothing to export", message: "No roster rows match the current filters." });
+      return;
+    }
+
+    const rowsHtml = exportRows
+      .map(
+        (row) => `
+          <tr>
+            <td>${row.date}</td>
+            <td>${row.employee}</td>
+            <td>${row.pod}</td>
+            <td>${row.status}</td>
+            <td>${row.brand}</td>
+            <td>${row.process}</td>
+            <td>${row.notes || "-"}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    const printWindow = window.open("", "_blank", "width=1200,height=900");
+    if (!printWindow) {
+      showToast({ type: "error", title: "Print blocked", message: "Your browser blocked the PDF pop-up. Please allow pop-ups and retry." });
+      return;
+    }
+
+    printWindow.document.write(`<!doctype html>
+      <html>
+        <head>
+          <title>Roster ${month}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; }
+            h1 { font-size: 24px; margin-bottom: 16px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #f8fafc; }
+          </style>
+        </head>
+        <body>
+          <h1>Roster Export - ${formatMonthYear(month)}</h1>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Employee</th>
+                <th>Pod</th>
+                <th>Status</th>
+                <th>Brand</th>
+                <th>Process</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 300);
+
+    showToast({ type: "success", title: "PDF export started", message: "Use the browser print dialog to save as PDF." });
   };
 
   const handleCellClick = (emp: any, date: string) => {
@@ -259,6 +393,7 @@ export default function RosterGridPage({ params }: { params: { month: string } }
 
       setEditModalOpen(false);
       mutate();
+      window.dispatchEvent(new CustomEvent("roster:refresh"));
     } catch (err: any) {
       setEditError(err.message);
     } finally {
@@ -370,6 +505,24 @@ export default function RosterGridPage({ params }: { params: { month: string } }
             icon={<RefreshCw className="w-3 h-3" />}
           >
             {data?.rosterMonth ? "Regenerate" : "Generate"}
+          </Button>
+
+          <Button
+            onClick={downloadRosterCsv}
+            variant="secondary"
+            size="xs"
+            icon={<Download className="w-3 h-3" />}
+          >
+            CSV
+          </Button>
+
+          <Button
+            onClick={downloadRosterPdf}
+            variant="secondary"
+            size="xs"
+            icon={<Printer className="w-3 h-3" />}
+          >
+            PDF
           </Button>
         </div>
 

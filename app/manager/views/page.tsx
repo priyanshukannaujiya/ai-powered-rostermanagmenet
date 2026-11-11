@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
+import { dashboardSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -27,9 +28,7 @@ export default function DimensionViewsPage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [activeTab, setActiveTab] = useState<"brand" | "process" | "pod" | "employee">("brand");
 
-  const { data, isLoading } = useSWR(`/api/roster/${currentMonth}`, fetcher, {
-    refreshInterval: 20000,
-  });
+  const { data, isLoading } = useSWR(`/api/roster/${currentMonth}`, fetcher, dashboardSWR);
 
   const [selectedBrandId, setSelectedBrandId] = useState<string>("");
   const [selectedProcessCode, setSelectedProcessCode] = useState<string>("");

@@ -7,6 +7,19 @@ import { isAvailable } from "@/lib/scheduler/constraints";
 
 export const dynamic = "force-dynamic";
 
+async function ensureRosterMonth(sql: any, month: string) {
+  const monthId = `roster-${month}`;
+  const existing = await sql`SELECT id FROM roster_months WHERE month = ${month} LIMIT 1;`;
+  if (existing.length === 0) {
+    await sql`
+      INSERT INTO roster_months (id, month, status, generated_at, updated_at)
+      VALUES (${monthId}, ${month}, 'draft', now(), now())
+      ON CONFLICT (month) DO NOTHING;
+    `;
+  }
+  return monthId;
+}
+
 const editCellSchema = z.object({
   employeeId: z.string().min(1),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -35,11 +48,7 @@ export async function PUT(
 
     const { employeeId, date, status, brandProcessId, overrideReason, isOverride } = parsed.data;
 
-    const monthId = `roster-${month}`;
-    const monthRecord = await sql`SELECT * FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
-    if (!monthRecord || monthRecord.length === 0) {
-      return NextResponse.json({ error: "Roster month not found. Please generate the roster first." }, { status: 404 });
-    }
+    const monthId = await ensureRosterMonth(sql, month);
 
     // Server-side constraint validation
     // If setting to 'working', verify employee is available (e.g. not on approved leave or comp-off)
@@ -80,6 +89,9 @@ export async function PUT(
       ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
       DO UPDATE SET status = EXCLUDED.status, pinned = true, notes = EXCLUDED.notes, updated_at = now();
     `;
+
+    // Clear stale conflict records for this month so resolved workarounds immediately unblock publication.
+    await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
 
     // Audit log
     await sql`

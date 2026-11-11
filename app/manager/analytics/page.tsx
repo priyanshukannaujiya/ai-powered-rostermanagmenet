@@ -38,6 +38,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { dashboardSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -117,10 +118,7 @@ function CustomTooltip({ active, payload, label }: any) {
 
 export default function AnalyticsPage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const { data, isLoading } = useSWR(`/api/analytics/${currentMonth}`, fetcher, {
-    refreshInterval: 30000,
-    revalidateOnFocus: true,
-  });
+  const { data, isLoading } = useSWR(`/api/analytics/${currentMonth}`, fetcher, dashboardSWR);
 
   // Build pod summary for radar chart
   const podRadar = useMemo(() => {

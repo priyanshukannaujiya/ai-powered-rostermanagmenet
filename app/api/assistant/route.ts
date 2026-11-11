@@ -62,6 +62,19 @@ function detectProvider(rawKey: string): "groq" | "anthropic" | "none" {
   return apiKey.startsWith("gsk_") ? "groq" : "anthropic";
 }
 
+async function ensureRosterMonth(sql: any, month: string) {
+  const monthId = `roster-${month}`;
+  const existing = await sql`SELECT id FROM roster_months WHERE month = ${month} LIMIT 1;`;
+  if (existing.length === 0) {
+    await sql`
+      INSERT INTO roster_months (id, month, status, generated_at, updated_at)
+      VALUES (${monthId}, ${month}, 'draft', now(), now())
+      ON CONFLICT (month) DO NOTHING;
+    `;
+  }
+  return monthId;
+}
+
 function buildToolResultFallback(toolResult: any): string | null {
   if (!toolResult || typeof toolResult !== "object") return null;
 
@@ -513,7 +526,7 @@ async function executeTool(
 
   const sql = neon(process.env.DATABASE_URL!);
   const month = args.month || new Date().toISOString().slice(0, 7);
-  const monthId = `roster-${month}`;
+  const monthId = await ensureRosterMonth(sql, month);
 
   // Check active import state
   const latestImports = await sql`

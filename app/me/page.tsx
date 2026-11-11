@@ -29,6 +29,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatDate, parseDateString, cn } from "@/lib/utils";
+import { dashboardSWR, liveSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -42,20 +43,14 @@ export default function EmployeePortalPage() {
   const { data: leavesData, mutate: mutateLeaves, isLoading: leavesLoading } = useSWR(
     "/api/leaves",
     fetcher,
-    {
-      refreshInterval: 20000,
-      revalidateOnFocus: true,
-    }
+    dashboardSWR
   );
 
   // SWR for employee notifications (shift appointments & alerts)
   const { data: notifData, mutate: mutateNotifs } = useSWR(
     "/api/notifications",
     fetcher,
-    {
-      refreshInterval: 10000,
-      revalidateOnFocus: true,
-    }
+    liveSWR
   );
 
   // SWR for employee's own schedule
@@ -67,10 +62,7 @@ export default function EmployeePortalPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: "get my schedule", month: currentMonth }),
       }).then((res) => res.json()),
-    {
-      refreshInterval: 20000,
-      revalidateOnFocus: true,
-    }
+    dashboardSWR
   );
 
   // Revalidate schedule and leaves when AI approves leaves or appoints shifts

@@ -25,6 +25,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { formatDate } from "@/lib/utils";
+import { dashboardSWR, liveSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -32,14 +33,8 @@ export default function ApprovalsQueuePage() {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<"pending" | "reviewed">("pending");
 
-  const { data, mutate, isLoading } = useSWR("/api/leaves", fetcher, {
-    refreshInterval: 20000,
-    revalidateOnFocus: true,
-  });
-  const { data: notificationData, mutate: mutateNotifications } = useSWR("/api/notifications", fetcher, {
-    refreshInterval: 10000,
-    revalidateOnFocus: true,
-  });
+  const { data, mutate, isLoading } = useSWR("/api/leaves", fetcher, dashboardSWR);
+  const { data: notificationData, mutate: mutateNotifications } = useSWR("/api/notifications", fetcher, liveSWR);
   const notifications = notificationData?.notifications || [];
 
   // Replan Preview Modal State

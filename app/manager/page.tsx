@@ -20,6 +20,8 @@ import {
   FileCheck,
   AlertCircle,
   ExternalLink,
+  Download,
+  Printer,
 } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
 import { Button } from "@/components/ui/Button";
@@ -29,6 +31,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { formatMonthYear } from "@/lib/utils";
+import { dashboardSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -39,10 +42,7 @@ export default function ManagerDashboard() {
   const { data, error, isLoading, mutate } = useSWR(
     `/api/roster/${currentMonth}`,
     fetcher,
-    {
-      refreshInterval: 20000,
-      revalidateOnFocus: true,
-    }
+    dashboardSWR
   );
 
   const [generating, setGenerating] = useState(false);
@@ -84,6 +84,7 @@ export default function ManagerDashboard() {
           message: `Solved with ${json.metrics?.coveragePercentage ?? 0}% coverage and ${json.conflictsCount ?? 0} conflict(s).`,
         });
         mutate();
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
       } else {
         showToast({
           type: "error",
@@ -110,6 +111,7 @@ export default function ManagerDashboard() {
           message: "All shift assignments have been frozen and published to employees.",
         });
         mutate();
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
       } else {
         showToast({
           type: "error",
@@ -122,6 +124,128 @@ export default function ManagerDashboard() {
     } finally {
       setPublishing(false);
     }
+  };
+
+  const escapeCsvValue = (value: string | number | null | undefined) => {
+    const text = String(value ?? "");
+    if (text.includes(",") || text.includes('"') || text.includes("\n")) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  };
+
+  const downloadRosterCsv = () => {
+    if (!data?.days?.length) {
+      showToast({ type: "warning", title: "Nothing to export", message: "Generate the roster before exporting." });
+      return;
+    }
+
+    const rows = (data.days || []).map((row: any): any => ({
+      date: row.date,
+      employee: row.employee_name || data?.meta?.employees?.find((emp: any) => emp.id === row.employee_id)?.name || "Unknown",
+      pod: data?.meta?.employees?.find((emp: any) => emp.id === row.employee_id)?.pod_name || "Unassigned",
+      status: row.status,
+      brand: row.brand_name || "-",
+      process: row.process_code || "-",
+      notes: row.notes || "",
+    }));
+
+    const headers = ["Date", "Employee", "Pod", "Status", "Brand", "Process", "Notes"];
+    const csv = [headers.join(",")]
+      .concat(
+        rows.map((row: { date: string; employee: string; pod: string; status: string; brand: string; process: string; notes: string }) =>
+          [
+            escapeCsvValue(row.date),
+            escapeCsvValue(row.employee),
+            escapeCsvValue(row.pod),
+            escapeCsvValue(row.status),
+            escapeCsvValue(row.brand),
+            escapeCsvValue(row.process),
+            escapeCsvValue(row.notes),
+          ].join(",")
+        )
+      )
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `roster-${currentMonth}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    showToast({ type: "success", title: "CSV ready", message: `Downloaded roster for ${formatMonthYear(currentMonth)}.` });
+  };
+
+  const downloadRosterPdf = () => {
+    if (!data?.days?.length) {
+      showToast({ type: "warning", title: "Nothing to export", message: "Generate the roster before exporting." });
+      return;
+    }
+
+    const rowsHtml = (data.days || [])
+      .map((row: any): string => {
+        const employeeName = row.employee_name || data?.meta?.employees?.find((emp: any) => emp.id === row.employee_id)?.name || "Unknown";
+        const podName = data?.meta?.employees?.find((emp: any) => emp.id === row.employee_id)?.pod_name || "Unassigned";
+        return `
+          <tr>
+            <td>${row.date}</td>
+            <td>${employeeName}</td>
+            <td>${podName}</td>
+            <td>${row.status}</td>
+            <td>${row.brand_name || "-"}</td>
+            <td>${row.process_code || "-"}</td>
+            <td>${row.notes || "-"}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const printWindow = window.open("", "_blank", "width=1200,height=900");
+    if (!printWindow) {
+      showToast({ type: "error", title: "Print blocked", message: "Allow pop-ups to export as PDF." });
+      return;
+    }
+
+    printWindow.document.write(`<!doctype html>
+      <html>
+        <head>
+          <title>Roster ${currentMonth}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; }
+            h1 { font-size: 24px; margin-bottom: 16px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #f8fafc; }
+          </style>
+        </head>
+        <body>
+          <h1>Roster Export - ${formatMonthYear(currentMonth)}</h1>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Employee</th>
+                <th>Pod</th>
+                <th>Status</th>
+                <th>Brand</th>
+                <th>Process</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 300);
+
+    showToast({ type: "success", title: "PDF export started", message: "Use the browser print dialog to save as PDF." });
   };
 
   const conflicts = data?.conflicts || [];
@@ -210,6 +334,24 @@ export default function ManagerDashboard() {
               Publish Roster
             </Button>
           )}
+
+          <Button
+            onClick={downloadRosterCsv}
+            variant="outline"
+            size="sm"
+            icon={<Download className="w-3.5 h-3.5" />}
+          >
+            CSV
+          </Button>
+
+          <Button
+            onClick={downloadRosterPdf}
+            variant="outline"
+            size="sm"
+            icon={<Printer className="w-3.5 h-3.5" />}
+          >
+            PDF
+          </Button>
 
           <Link href={`/manager/roster/${currentMonth}`}>
             <Button
