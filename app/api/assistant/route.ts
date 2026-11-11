@@ -49,6 +49,149 @@ function isValidDate(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function sanitizeApiKey(rawKey: string): string {
+  return rawKey
+    .split(/[\r\n]+/)
+    .map((k) => k.trim())
+    .find((k) => k.startsWith("gsk_") || k.startsWith("sk-")) || "";
+}
+
+function detectProvider(rawKey: string): "groq" | "anthropic" | "none" {
+  const apiKey = sanitizeApiKey(rawKey);
+  if (!apiKey) return "none";
+  return apiKey.startsWith("gsk_") ? "groq" : "anthropic";
+}
+
+async function callGroqAssistant({
+  systemPrompt,
+  history,
+  message,
+  toolsDefinition,
+}: {
+  systemPrompt: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+  message: string;
+  toolsDefinition: any[];
+}) {
+  const messages: any[] = [
+    { role: "system", content: systemPrompt },
+    ...history,
+    { role: "user", content: message },
+  ];
+
+  const apiKey = sanitizeApiKey(process.env.GROQ_API_KEY || "");
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY is not configured.");
+  }
+
+  let modelChoice = "openai/gpt-oss-120b";
+  let firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: modelChoice,
+      messages,
+      tools: toolsDefinition,
+      tool_choice: "auto",
+      temperature: 0.2,
+    }),
+  });
+
+  if (!firstRes.ok) {
+    modelChoice = "qwen/qwen3.8-27b";
+    firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: modelChoice,
+        messages,
+        tools: toolsDefinition,
+        tool_choice: "auto",
+        temperature: 0.2,
+      }),
+    });
+  }
+
+  if (!firstRes.ok) {
+    throw new Error(`Groq request failed with ${firstRes.status}: ${await firstRes.text()}`);
+  }
+
+  const firstData = await firstRes.json();
+  const assistantMsg = firstData.choices?.[0]?.message;
+  let replyText = "";
+  let toolResult: any = null;
+  let toolUsed = "";
+  let systemReflected = false;
+
+  if (assistantMsg?.tool_calls && assistantMsg.tool_calls.length > 0) {
+    messages.push(assistantMsg);
+
+    for (const call of assistantMsg.tool_calls) {
+      const funcName = call.function.name;
+      let parsedArgs: any = {};
+      try {
+        parsedArgs = JSON.parse(call.function.arguments || "{}");
+      } catch {
+        toolResult = { error: "The assistant produced invalid tool arguments; no action was taken." };
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify(toolResult),
+        });
+        continue;
+      }
+
+      toolUsed = funcName;
+      const res = await executeTool(
+        funcName,
+        { ...parsedArgs, month: parsedArgs.month ?? new Date().toISOString().slice(0, 7) },
+        "manager",
+        null,
+        undefined,
+        message,
+        history.slice(-1)[0]?.content || ""
+      );
+      toolResult = res;
+      if (res?.systemReflected) systemReflected = true;
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: JSON.stringify(res),
+      });
+    }
+
+    const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: modelChoice,
+        messages,
+        temperature: 0.2,
+      }),
+    });
+
+    if (!secondRes.ok) {
+      throw new Error(`Groq follow-up request failed with ${secondRes.status}: ${await secondRes.text()}`);
+    }
+
+    const secondData = await secondRes.json();
+    replyText = secondData.choices?.[0]?.message?.content || "";
+  } else if (assistantMsg?.content) {
+    replyText = assistantMsg.content;
+  }
+
+  return { replyText, toolResult, toolUsed, systemReflected };
+}
+
 // Live OpenAI-compatible Function Tools Definition
 const toolsDefinition = [
   {
@@ -2033,12 +2176,10 @@ export async function POST(req: NextRequest) {
   const previousAssistantMessage =
     [...history].reverse().find((entry) => entry.role === "assistant")?.content || "";
 
-  const rawKey = process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY || "";
-  // Sanitize key: eliminate any accidental newlines, duplicate lines or carriage returns
-  const apiKey = rawKey
-    .split(/[\r\n]+/)
-    .map((k) => k.trim())
-    .find((k) => k.startsWith("gsk_") || k.startsWith("sk-")) || "";
+  const groqKey = sanitizeApiKey(process.env.GROQ_API_KEY || "");
+  const anthropicKey = sanitizeApiKey(process.env.ANTHROPIC_API_KEY || "");
+  const provider = detectProvider(`${groqKey || ""}${anthropicKey || ""}`);
+  const apiKey = provider === "groq" ? groqKey : anthropicKey;
 
   const sql = neon(process.env.DATABASE_URL!);
   const latestImportRec = await sql`SELECT id, filename, uploaded_at, status FROM imports WHERE status = 'committed' ORDER BY uploaded_at DESC LIMIT 1;`;
@@ -2059,8 +2200,7 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
     let toolUsed = "";
     let toolResult: any = null;
 
-    // Real OpenAI-compatible Function Calling Loop using Groq (gpt-oss-120b / qwen3.8-27b)
-    if (apiKey) {
+    if (provider === "groq" && groqKey) {
       try {
         const messages: any[] = [
           { role: "system", content: systemPrompt },
@@ -2072,7 +2212,7 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
         let firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${groqKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
@@ -2089,7 +2229,7 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
           firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${apiKey}`,
+              Authorization: `Bearer ${groqKey}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -2144,11 +2284,10 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
               });
             }
 
-            // Second pass: Model synthesizes live database records into a genuine, real response
             const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${apiKey}`,
+                Authorization: `Bearer ${groqKey}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
@@ -2167,10 +2306,99 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
           }
         }
       } catch (fetchErr) {
-        console.warn("External LLM fetch exception, using deterministic fallback:", fetchErr);
+        console.warn("External Groq fetch exception:", fetchErr);
+      }
+    } else if (provider === "anthropic" && anthropicKey) {
+      try {
+        const anthropicMessages = [...history, { role: "user", content: message }].map((entry) => ({
+          role: entry.role,
+          content: [{ type: "text", text: entry.content }],
+        }));
+
+        const payload = {
+          model: "claude-3-5-sonnet-20241022",
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: anthropicMessages,
+          tools: toolsDefinition.map((tool) => ({
+            name: tool.function.name,
+            description: tool.function.description,
+            input_schema: tool.function.parameters,
+          })),
+        };
+
+        const firstRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (firstRes.ok) {
+          const data = await firstRes.json();
+          const blocks = data.content || [];
+          const toolCalls = blocks.filter((block: any) => block.type === "tool_use");
+
+          if (toolCalls.length > 0) {
+            const secondMessages = [
+              ...anthropicMessages,
+              { role: "assistant", content: blocks },
+            ];
+
+            for (const block of toolCalls) {
+              toolUsed = block.name;
+              const res = await executeTool(
+                block.name,
+                { ...(block.input || {}), month: (block.input && block.input.month) || month },
+                user!.role,
+                user!.employeeId,
+                user!.id,
+                message,
+                previousAssistantMessage
+              );
+              toolResult = res;
+              if (res?.systemReflected) systemReflected = true;
+
+              secondMessages.push({
+                role: "user",
+                content: [{ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(res) }],
+              });
+            }
+
+            const secondRes = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "x-api-key": anthropicKey,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                ...payload,
+                messages: secondMessages,
+              }),
+            });
+
+            if (secondRes.ok) {
+              const secondData = await secondRes.json();
+              replyText = (secondData.content || [])
+                .filter((block: any) => block.type === "text")
+                .map((block: any) => block.text)
+                .join("\n\n");
+            }
+          } else {
+            replyText = (data.content || [])
+              .filter((block: any) => block.type === "text")
+              .map((block: any) => block.text)
+              .join("\n\n");
+          }
+        }
+      } catch (fetchErr) {
+        console.warn("External Anthropic fetch exception:", fetchErr);
       }
     }
-
     if (!replyText) {
       const error = apiKey
         ? "The assistant provider did not return a response. Please try again."
