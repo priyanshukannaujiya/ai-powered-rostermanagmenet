@@ -62,6 +62,40 @@ function detectProvider(rawKey: string): "groq" | "anthropic" | "none" {
   return apiKey.startsWith("gsk_") ? "groq" : "anthropic";
 }
 
+function buildToolResultFallback(toolResult: any): string | null {
+  if (!toolResult || typeof toolResult !== "object") return null;
+
+  if (toolResult.message && typeof toolResult.message === "string") {
+    return toolResult.message;
+  }
+
+  if (toolResult.needsClarification && toolResult.message) {
+    return toolResult.message;
+  }
+
+  if (toolResult.approved && toolResult.employeeName) {
+    return `Leave approved for ${toolResult.employeeName} (${toolResult.startDate || ""}${toolResult.endDate ? ` to ${toolResult.endDate}` : ""}).`;
+  }
+
+  if (toolResult.success && toolResult.appointedEmployee) {
+    return `Assignment completed for ${toolResult.appointedEmployee} on ${Array.isArray(toolResult.dates) ? toolResult.dates.join(", ") : "the selected date"}.`;
+  }
+
+  if (toolResult.success && toolResult.notificationSent) {
+    return `Notification sent to ${toolResult.employee || "employee"}.`;
+  }
+
+  if (toolResult.error) {
+    return `I couldn't complete that action: ${toolResult.error}`;
+  }
+
+  if (toolResult.totalCount !== undefined) {
+    return `I found ${toolResult.totalCount} results in the roster data.`;
+  }
+
+  return null;
+}
+
 async function callGroqAssistant({
   systemPrompt,
   history,
@@ -2400,9 +2434,20 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
       }
     }
     if (!replyText) {
+      const fallbackReply = buildToolResultFallback(toolResult);
       const error = apiKey
         ? "The assistant provider did not return a response. Please try again."
         : "The assistant is not configured. Set GROQ_API_KEY or ANTHROPIC_API_KEY to enable it.";
+
+      if (fallbackReply) {
+        return NextResponse.json({
+          reply: fallbackReply,
+          toolUsed,
+          systemReflected,
+          data: toolResult,
+        });
+      }
+
       return NextResponse.json({ error, reply: error }, { status: 503 });
     }
     return NextResponse.json({
