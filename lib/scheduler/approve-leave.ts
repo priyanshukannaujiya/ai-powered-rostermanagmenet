@@ -329,8 +329,6 @@ export async function approveLeaveAndReplan({
   // 5. Claim and roster writes run in the same database transaction.
   // Every subsequent write is guarded by this unique review timestamp so a
   // competing approval cannot modify the roster if its claim affects zero rows.
-  const claimAt = new Date().toISOString();
-
   // 6. Atomic, Transactional Roster Execution
   let txResults: any[];
   try {
@@ -338,7 +336,7 @@ export async function approveLeaveAndReplan({
       const txStmts: any[] = [];
       txStmts.push(tx`
         UPDATE leaves
-        SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = ${claimAt}, updated_at = now()
+        SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = transaction_timestamp(), updated_at = now()
         WHERE id = ${leaveId} AND status = 'pending'
         RETURNING id;
       `);
@@ -350,7 +348,7 @@ export async function approveLeaveAndReplan({
           WHERE roster_month_id = ${plan.mId}
             AND date >= ${plan.cutoffDate}
             AND pinned = false
-            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp());
         `);
         txStmts.push(tx`
           DELETE FROM conflicts
