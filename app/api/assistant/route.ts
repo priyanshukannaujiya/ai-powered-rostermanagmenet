@@ -79,11 +79,11 @@ async function ensureRosterMonth(sql: any, month: string) {
 function buildToolResultFallback(toolResult: any): string | null {
   if (!toolResult || typeof toolResult !== "object") return null;
 
-  if (toolResult.message && typeof toolResult.message === "string") {
+  if (toolResult.needsClarification && toolResult.message) {
     return toolResult.message;
   }
 
-  if (toolResult.needsClarification && toolResult.message) {
+  if (toolResult.message && typeof toolResult.message === "string") {
     return toolResult.message;
   }
 
@@ -103,8 +103,31 @@ function buildToolResultFallback(toolResult: any): string | null {
     return `I couldn't complete that action: ${toolResult.error}`;
   }
 
+  // Detailed conflict summary fallback
+  if (toolResult.totalCount !== undefined && Array.isArray(toolResult.conflicts)) {
+    const lines: string[] = [];
+    lines.push(`**${toolResult.month || "Current"} Roster Conflicts:** ${toolResult.totalCount} total (${toolResult.blockingCount || 0} blocking, ${toolResult.warningCount || 0} warnings)\n`);
+    const topConflicts = toolResult.conflicts.slice(0, 10);
+    for (const c of topConflicts) {
+      const dateStr = c.date || "N/A";
+      const brand = c.brand || "";
+      const severity = c.severity === "blocking" ? "🔴" : "🟡";
+      lines.push(`${severity} **${dateStr}** – ${brand}${c.process ? ` (${c.process})` : ""}: ${c.message}${c.suggestedFix ? ` → _${c.suggestedFix}_` : ""}`);
+    }
+    if (toolResult.conflicts.length > 10) {
+      lines.push(`\n_…and ${toolResult.conflicts.length - 10} more conflicts._`);
+    }
+    return lines.join("\n");
+  }
+
+  // Generic count fallback for other tools with totalCount
   if (toolResult.totalCount !== undefined) {
-    return `I found ${toolResult.totalCount} results in the roster data.`;
+    return `Found ${toolResult.totalCount} results in the roster data.`;
+  }
+
+  // Structured data summary for health/workload/etc
+  if (toolResult.overallCoverage !== undefined) {
+    return `**System Health:** ${toolResult.overallCoverage}% overall coverage. Staffed shifts: ${toolResult.staffedShifts ?? "N/A"} / ${toolResult.totalShifts ?? "N/A"}. Active conflicts: ${toolResult.activeConflicts ?? 0}.`;
   }
 
   return null;
@@ -2197,6 +2220,10 @@ SENSITIVE ACTIONS:
             }
 
             // Follow-up query to provide tool results back to LLM
+            // After the first tool execution round, omit tools to force the LLM
+            // to produce a text synthesis of the results. Only re-offer tools on
+            // intermediate turns if the user query clearly needs multi-step chaining.
+            const shouldOfferTools = turns < MAX_TURNS - 1 && turns >= 2;
             currentRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: {
@@ -2206,8 +2233,9 @@ SENSITIVE ACTIONS:
               body: JSON.stringify({
                 model: modelChoice,
                 messages,
-                tools: toolsDefinition,
-                tool_choice: "auto",
+                ...(shouldOfferTools
+                  ? { tools: toolsDefinition, tool_choice: "auto" }
+                  : {}), // No tools → forces text response
                 temperature: 0.2,
               }),
             });
