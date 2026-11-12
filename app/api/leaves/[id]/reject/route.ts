@@ -60,7 +60,8 @@ export async function POST(
               SELECT 1 FROM pods p
               WHERE p.id = ${leave[0].pod_id} AND p.lead_employee_id = ${user!.employeeId}
             )
-          );
+          )
+        RETURNING id;
       `,
       tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
