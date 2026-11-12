@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
@@ -354,7 +355,7 @@ export async function POST(
 
       statements.push(tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
-        VALUES (${`audit-${crypto.randomUUID()}`}, ${user?.id || null}, 'ROSTER_GENERATED', 'roster_months', ${monthId}, ${JSON.stringify(scheduleResult.metrics)}::jsonb, now(), now());
+        VALUES (${`audit-${randomUUID()}`}, ${user?.id || null}, 'ROSTER_GENERATED', 'roster_months', ${monthId}, ${JSON.stringify(scheduleResult.metrics)}::jsonb, now(), now());
       `);
       return statements;
     });
