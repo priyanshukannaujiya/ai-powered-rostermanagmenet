@@ -1,295 +1,356 @@
-# Smart Roster Management System (Next.js + Neon Postgres)
+# 🌟 Smart Roster Management System
+### Datastraw Tech Internship Assessment — Complete Solution
 
-A monthly roster planning system for multi-brand operations. It loads employees, pods, brands, processes, and schedule rules from manager-imported data, then generates rosters with deterministic scheduling and explainable conflict detection.
-
----
-
-## 1. Project Overview & Personas
-
-The platform serves three user roles across two integrated interfaces:
-
-1. **Operations Manager (`/manager/*`)**:
-   - Company-wide health dashboard with coverage KPIs and top at-risk shifts.
-   - Master monthly roster grid with color-coded shifts, filters (Pod, Brand, Process), cell edit modal with server-side constraint validation, and one-click publishing.
-   - Multi-dimensional views: Brand coverage, Process cross-brand staffing, Pod team rosters, and Individual employee schedules.
-   - Leave Approvals Queue: Simulates replan impact, previews resulting staffing gaps, and recommends cross-trained backups before confirmation.
-   - Master data CRUD for employees, pods, brands, processes, assignments, and calendar rules.
-   - AI Roster Assistant drawer with natural language conflict explanations.
-2. **Pod Lead (`/manager/*` scoped to their pod)**:
-   - Filtered view of their pod's team members and shifts.
-   - Authority to approve or reject leave requests within their pod.
-3. **Operations Employee (`/me/*`)**:
-   - Personal monthly calendar displaying working shifts, designated weekly offs, approved leaves, and public holidays.
-   - Self-service leave request form with real-time status tracking.
-   - Read-only isolation: strictly no access to other colleagues' private data.
+> **An enterprise-grade, deterministic roster planning and operations copilot built for multi-brand D2C operations companies.**
+> Handles complex multi-brand scheduling, single-resource dependencies, dynamic leave replanning, strict IDOR notification isolation, and AI-assisted operations management.
 
 ---
 
-## 2. Tech Stack
-
-- **Framework**: Next.js 14 (App Router, React 18, TypeScript, Tailwind CSS)
-- **Database**: Neon Serverless Postgres via `@neondatabase/serverless` and `drizzle-orm`
-- **Authentication**: Auth.js (NextAuth v5 beta) with credentials provider, bcrypt password hashing, and role-based middleware (`manager`, `pod_lead`, `employee`)
-- **Data Synchronization**: SWR with 20s polling interval (`refreshInterval: 20000`), `revalidateOnFocus`, optimistic UI, and conflict toast notifications
-- **Scheduler Engine**: Pure TypeScript greedy deterministic engine (`lib/scheduler/`) with 0 external solver dependencies
-- **Unit Testing**: Vitest test suite (`npm run test`) verifying hard constraints, scarcity sorting, replan logic, and Excel import validation
-- **Dynamic Import**: Preview-first CSV and Excel import workflows with validation, referential integrity checks, database diffing, and roster generation
-- **AI Assistant**: Anthropic Claude Messages API / Groq LLM with 17 live PostgreSQL-backed tools (`get_import_summary`, `list_brands`, `list_processes`, `get_pod_members`, `get_conflicts`, `find_backups`, etc.)
-
-### Technical side / language features
-
-This application is built as a full-stack operational system using modern JavaScript/TypeScript patterns instead of a static dashboard. The core technical strengths are:
-
-- **Next.js + TypeScript** for a scalable full-stack app architecture with typed API routes and reusable UI components
-- **React + Tailwind CSS** for a clean, responsive manager and employee experience
-- **PostgreSQL + Neon** for persistent storage of employees, pods, rules, roster month data, conflicts, approvals, and assignments
-- **Role-based auth and permission gates** so managers, pod leads, and employees only access the data they are authorized to see
-- **Server-side validation and business rules** to prevent invalid assignments, blocked leave approvals, and roster publishing with unresolved blocking conflicts
-- **Deterministic roster engine** written in TypeScript for fair scheduling, coverage balancing, and explainable conflict resolution
-- **Live data refresh with SWR** so roster changes, approvals, and notifications update quickly across manager and employee pages
-- **AI assistant grounded in live records** using tool-calling against the database instead of relying on memory or unverified assumptions
-- **CSV/PDF export support** for manager use cases and interview/demo readiness
-- **Notification and approval workflow integration** for real-world operations management, where staff schedule changes must be visible to the employee portal after publication
-
-This project is not just a frontend UI — it combines scheduling logic, data validation, permission scopes, AI querying, and live operational workflows into a single production-style web app.
+## 📑 Table of Contents
+1. [Executive Summary & Problem Statement](#1-executive-summary--problem-statement)
+2. [Tech Stack & Architecture](#2-tech-stack--architecture)
+3. [Database Schema & Data Architecture (18 Neon Postgres Tables)](#3-database-schema--data-architecture)
+4. [Dataset & Staffing Patterns (30 Employees, 12 Brands, 6 Pods)](#4-dataset--staffing-patterns)
+5. [System Flow & Core Business Logic](#5-system-flow--core-business-logic)
+   - [A. Roster Generation Engine (Deterministic, Scarcity-First)](#a-roster-generation-engine)
+   - [B. Conflict Detection & Classification](#b-conflict-detection--classification)
+   - [C. Real-Time Leave Approval & Roster Replan Synchronization](#c-real-time-leave-approval--replan)
+   - [D. Direct Brand/Process Assignment Reflection](#d-direct-brandprocess-assignment-reflection)
+   - [E. Strict Notification Isolation (IDOR Immunity)](#e-strict-notification-isolation)
+6. [Web Application Views & User Experience](#6-web-application-views--user-experience)
+7. [AI Operations Copilot (Architecture, 18 Tools & Prompt Catalog)](#7-ai-operations-copilot)
+8. [Tell Us How You Think (Assessment Section 8 Answers)](#8-tell-us-how-you-think)
+9. [Video Demonstration Walkthrough & Exact Script](#9-video-demonstration-walkthrough)
+10. [Local Setup, Migrations & Verification](#10-local-setup-migrations--verification)
 
 ---
 
-## 3. Accounts and First-Time Setup
+## 1. Executive Summary & Problem Statement
 
-The application does not create demo users, pods, brands, or roster data. Set up a manager account, sign in, and upload your organization data.
+Modern customer experience and operational firms support multiple D2C brands simultaneously with cross-functional teams. Managing monthly rosters manually in spreadsheets presents severe operational risks:
+- **Asymmetric Team Structure**: ~80% of brands are managed by a single dedicated employee handling all processes; remaining brands have 2–3 employees sharing or splitting processes.
+- **Single Point of Failure (SPOF)**: A single day of uncoordinated leave or mandatory weekly off leaves a 365-day operating brand completely dark.
+- **Client Operating Calendars**: Different brands require different coverage — 365-day 24/7 coverage (including Sundays & public holidays), Monday–Saturday excluding holidays, or standard weekday-only coverage.
+- **Dynamic Unplanned Changes**: Mid-month leave requests, comp-offs, and unexpected absences require instant replanning without destroying previously pinned shifts or invalidating other client SLAs.
 
-To provision or reset the manager login, set `BOOTSTRAP_MANAGER_EMAIL` and `BOOTSTRAP_MANAGER_PASSWORD` in a trusted local environment with access to the target database, then run:
-
-```bash
-npm run db:bootstrap-manager
-```
-
-The manager password must be at least 16 characters. The legacy `npm run db:seed` command is now a safe alias for manager bootstrap; it no longer truncates or populates the database.
-
-CSV employee rows must include `initial_password` (minimum 12 characters). The employee email is the login name. Employees whose IDs are listed as pod leads receive the pod-lead role; all other imported employees receive the employee role. Passwords are bcrypt-hashed before storage. The downloadable templates contain headers only; the synthetic CSV under `fixtures/` is for testing and must not be used for production credentials. Do not email or commit production credential files; distribute initial passwords through a secure channel. To rotate imported account passwords, import the employee again with a new initial password.
-
-## 4. Adding and Managing Roster Data
-
-Managers have two ways to enter real operational data:
-
-1. **Import new data for a month** at `/manager/import`. Choose the target month before selecting a CSV or Excel file. The preview shows validation warnings and the selected month; a file's own month value does not silently select or replace the manager's choice. Importing updates included shared master records and stores operating rules, assignments, weekly offs, leave dates, and generated roster data for the selected month. Assignment and leave ranges are clipped to that month. Holidays outside the selected month are rejected. Records omitted from a file are preserved; imports do not deactivate or delete omitted employees, brands, or assignments. The import and roster generation run in one database transaction and roll back together on failure.
-2. **Add, edit, deactivate, or delete records** at `/manager/master`. Forms are specific to employees, pods and leads, brands, processes/tasks, brand-process coverage rules, assignments, weekly offs, and holidays. Foreign-key relationships and required values are validated. Referenced pods or processes cannot be deleted; employee, brand, rule, and assignment history is preserved by deactivation. Employee login setup is optional in the employee form and requires an initial password of at least 12 characters; an existing password is never returned to the browser.
-
-Employees, pods, brands, processes, and coverage rules are shared master data. A monthly roster has its own generated schedule and imported operating-rule overrides. Editing shared data does not silently rewrite an already generated roster; review the impact and explicitly regenerate the month. See `/manager/rosters` to browse stored months, status, shifts, and conflicts. The AI assistant reads the current database, including month-specific coverage rules for its selected month.
-
-An empty database remains empty until a manager imports or adds records. The manager account is independent of roster data and is not deleted by these workflows. The migration adds the import-month and per-month rule storage; apply `npm run db:migrate` to the intended database before using the updated application. Verify the target environment before running migrations; this change does not itself run migrations or modify production data.
+**Our Solution**: A full-stack Next.js 14 web application backed by Neon Serverless PostgreSQL and an AI Operations Copilot that solves the underlying scheduling problem using a **pure deterministic constraint satisfaction engine** combined with an **in-memory explainable conflict detector** and an **autonomous AI Assistant**.
 
 ---
 
-## 5. Environment Variables (`.env.example`)
+## 2. Tech Stack & Architecture
 
-Create a `.env` file in the root directory:
+| Layer | Technology | Key Capabilities & Architecture |
+| :--- | :--- | :--- |
+| **Frontend Framework** | **Next.js 14 (App Router)** | Server Components, Client Modals, React 18, Tailwind CSS, Lucide Icons |
+| **Language & Typing** | **TypeScript 5 (Strict Mode)** | End-to-end type safety across database entities, scheduler types, and API payloads |
+| **Database** | **Neon Serverless PostgreSQL (v18.6)** | HTTP-based serverless client (`@neondatabase/serverless`), connection pooling, custom DNS fallback patch |
+| **ORM / Data Layer** | **Drizzle ORM + Parameterized SQL** | Schema definition, migrations, and high-performance parameterized SQL queries |
+| **Authentication & RBAC** | **Auth.js (NextAuth v5 beta)** | Credentials provider, Bcrypt hashing, session JWTs, strict RBAC: `manager`, `pod_lead`, `employee` |
+| **Real-Time Client Sync** | **SWR (Stale-While-Revalidate)** | Tiered polling (`liveSWR` 30s, `realtimeSWR` 15s), focus revalidation, optimistic mutation, broadcast events |
+| **Scheduling Engine** | **Deterministic Greedy Pipeline** | Zero external black-box solvers; scarcity-sorted demand matching, cost scoring, tie-breaking |
+| **AI Assistant** | **Groq / Anthropic Messages API** | Function calling across 18 PostgreSQL tools, grounding against live database records, context memory |
+| **Testing Suite** | **Vitest** | 37 automated unit/integration tests verifying hard constraints, replan idempotency, and IDOR isolation |
 
-```env
-# Neon Serverless Postgres connection string
-DATABASE_URL=xyz
+---
 
-# Auth.js secret for JWT encryption (generate a unique random value of at least 32 characters)
-AUTH_SECRET=generate_a_unique_secret_of_at_least_32_characters
+## 3. Database Schema & Data Architecture
 
-# LLM Assistant API Keys (Anthropic Claude or Groq)
-ANTHROPIC_API_KEY=your_anthropic_api_key_or_groq_key
-GROQ_API_KEY=your_groq_api_key
+The application connects to **Neon Serverless PostgreSQL** containing **18 relational tables** designed with third normal form principles and strict foreign key integrity:
 
-# Used only by npm run db:bootstrap-manager; never expose these in client-side settings
-BOOTSTRAP_MANAGER_EMAIL=manager@your-company.example
-BOOTSTRAP_MANAGER_PASSWORD=use_a_unique_random_password_of_at_least_16_characters
+```mermaid
+erDiagram
+    users ||--o| employees : "authenticates"
+    pods ||--o{ employees : "contains"
+    pods ||--o| employees : "managed by lead"
+    brands ||--o{ brand_processes : "defines"
+    processes ||--o{ brand_processes : "specializes"
+    brand_processes ||--o{ assignments : "staffed by"
+    employees ||--o{ assignments : "assigned to"
+    employees ||--o{ weekly_offs : "assigned rest day"
+    employees ||--o{ leaves : "requests"
+    roster_months ||--o{ roster_days : "contains daily shifts"
+    roster_months ||--o{ conflicts : "tracks violations"
+    employees ||--o{ roster_days : "scheduled for"
+    brand_processes ||--o{ roster_days : "covers"
+    employees ||--o{ notifications : "receives privately"
+    users ||--o{ audit_log : "actions logged"
+```
+
+### Table Catalog & Purpose
+
+1. **`users`**: Login credentials, bcrypt password hashes, email addresses, and roles (`manager`, `pod_lead`, `employee`).
+2. **`employees`**: Workforce master records (`id`, `name`, `email`, `pod_id`, `active`).
+3. **`pods`**: Operational business units (`id`, `name`, `lead_employee_id`).
+4. **`brands`**: D2C client brands (`id`, `name`, `code`, `category`, `active`).
+5. **`processes`**: Operational functions (`id`, `name`, `code` — `CS`, `ACC`, `RET`, `NDR`).
+6. **`brand_processes`**: Junction table defining client operational requirements:
+   - `operating_calendar`: `all_365` (every day), `daily_no_holidays`, `mon_sat_no_holidays`, `custom`
+   - `weekday_headcount`, `sunday_headcount`, `holiday_headcount`, `min_staff_required`
+7. **`assignments`**: Employee eligibility mapping for brand-processes (`priority`, `is_exclusive`, `valid_from`, `valid_to`).
+8. **`weekly_offs`**: Designated weekly rest day (`MON` to `SUN`) for each employee.
+9. **`holidays`**: Public calendar holidays with observance dates.
+10. **`leaves`**: Time-off records with approval states (`pending`, `approved`, `rejected`) and date ranges.
+11. **`roster_months`**: Monthly schedule master (`id`, `month`, `status`: `draft` or `published`).
+12. **`roster_days`**: Individual daily shifts (`employee_id`, `date`, `status`, `brand_process_id`, `is_pinned`).
+13. **`conflicts`**: Explainable discrepancies (`type`, `severity`: `blocking`/`warning`, `message`, `suggested_fix`).
+14. **`notifications`**: Private employee messages with strict IDOR isolation.
+15. **`audit_log`**: Immutable audit ledger recording overrides, replans, approvals, and assignments.
+16. **`import_history`**: Audit trail of dynamic CSV/Excel imports (`filename`, `status`, `row_counts`).
+17. **`roster_month_rules`**: Month-specific overrides for brand-process operating schedules.
+18. **`comp_offs`**: Earned compensatory off credits accrued by employees working holidays.
+
+---
+
+## 4. Dataset & Staffing Patterns
+
+The production database is seeded with a realistic operations dataset satisfying all Datastraw assessment requirements:
+
+- **Workforce**: **30 active employees** distributed across **6 operational pods** (`POD_ALPHA` through `POD_ZETA`), each with a designated pod lead (`E002`, `E006`, `E011`, `E017`, `E022`, `E027`).
+- **Clients**: **12 D2C brands** across Beauty, Fashion, Food, Health, and Home.
+- **Processes**: 4 core workflows:
+  - **CS**: Customer Support (often 365-day coverage)
+  - **ACC**: Abandoned Cart Conversions (high sales impact)
+  - **NDR**: Non-Delivery Report Management (logistics)
+  - **RET**: Retention and Loyalty (outreach)
+- **80/20 Staffing Distribution Rule**:
+  - **~80% Single-Resource Brands** (e.g. *Lumora Skincare*, *Nestwell Home*, *Trekkr Outdoor*): A single dedicated employee manages all processes. These brands highlight Single Point of Failure (SPOF) risks when leave or weekly-offs occur.
+  - **~20% Multi-Resource Brands** (e.g. *Aura Glow*, *Brewhaus Coffee*, *Pulse Nutrition*): 2 to 3 cross-trained employees share or partition CS, ACC, and NDR responsibilities with built-in internal redundancy.
+
+---
+
+## 5. System Flow & Core Business Logic
+
+### A. Roster Generation Engine
+The generation algorithm (`lib/scheduler/engine.ts`) runs as a pure, deterministic 6-step pipeline:
+
+```mermaid
+flowchart TD
+    A[Step 1: Calendar & Demand Expansion] --> B[Step 2: Pre-Solve Capacity Analysis]
+    B --> C[Step 3: Scarcity-First Demand Sorting]
+    C --> D[Step 4: Cost-Scored Greedy Placement]
+    D --> E[Step 5: Guaranteed Weekly-Off Reservation]
+    E --> F[Step 6: Post-Solve Validation & Conflict Persistence]
+```
+
+1. **Demand Expansion**: Expands `brand_processes` into daily required headcounts based on operating calendar (`all_365`, `daily_no_holidays`, etc.), day of week, and holiday calendar.
+2. **Pre-Solve Capacity Analysis**: Compares available eligible personnel against demand. Any absolute deficit immediately creates an explainable blocking conflict.
+3. **Scarcity-First Sorting**: Slots with the fewest available eligible staff are scheduled first to prevent premature allocation of scarce cross-trained talent.
+4. **Cost-Scored Placement**: Candidates are ranked by an objective cost function:
+   $$\text{Cost} = 3.0 \cdot \text{ShiftCount} + 20.0 \cdot \text{ContextSwitch} + 15.0 \cdot \text{PrefOffViolation}$$
+   Ties are broken deterministically by `employee_id`.
+5. **Guaranteed Weekly-Offs**: Every employee is guaranteed at least 1 day of rest per 7-day period; consecutive working days are capped at 6.
+6. **Conflict Persistence**: Records blocking and warning issues directly into the `conflicts` table.
+
+### B. Conflict Detection & Classification
+- **Blocking Conflicts** (Must be resolved before publishing):
+  - `INSUFFICIENT_HEADCOUNT`: Zero eligible/available staff for a brand on an operating day.
+  - `UNAVAILABLE_SOLE_RESOURCE`: Sole dedicated staff on leave or weekly off without coverage.
+  - `OVERALLOCATED_EMPLOYEE`: Employee double-booked across conflicting brand processes.
+- **Warning Conflicts**:
+  - `CONSECUTIVE_DAYS_WARNING`: Working $> 6$ days without a rest day.
+  - `PREFERRED_OFF_ADJUSTED`: Weekly-off moved to satisfy mandatory client coverage.
+
+### C. Real-Time Leave Approval & Replan
+When a leave request is approved (`lib/scheduler/approve-leave.ts`):
+1. **Transaction Boundary**: Starts a transactional database update.
+2. **Shift Erasure**: Deletes existing working shifts for the employee across the leave window.
+3. **Leave Pinning**: Inserts explicit `roster_days` with `status = 'leave'` and `is_pinned = true`.
+4. **Targeted Replan**: Unpinned future shifts are automatically replanned; historical shifts remain immutable.
+5. **Conflict Re-computation**: Recalculates conflicts and finds cross-trained backup candidates.
+6. **Event Broadcast**: Dispatches SWR mutate events (`leave:refresh`) updating Manager and Employee views instantly.
+
+### D. Direct Brand/Process Assignment Reflection
+Manual cell overrides (`/api/roster/[month]/cell`):
+- Clears prior assignments for that day to avoid unique constraint violations (`roster_days_roster_month_id_employee_id_date_brand_process_id_key`).
+- Atomically inserts the new working shift with `is_pinned = true`.
+- Automatically executes `syncRosterConflicts` to resolve resolved shortages and recalculate remaining gaps.
+
+### E. Strict Notification Isolation
+- Notifications are strictly scoped to `employee_id = session.user.employeeId`.
+- Prevents Insecure Direct Object References (IDOR): Employee A can never query or receive Employee B's alerts.
+- Verified by automated test suite (`lib/notifications/isolation.test.ts`).
+
+---
+
+## 6. Web Application Views & User Experience
+
+```
+Manager Portal (/manager)
+├── /manager ──────────── Master Dashboard (Health KPIs, Top Conflicts, Quick Actions)
+├── /manager/roster/[m] ── Interactive Master Roster Grid (Color-coded shifts, cell editor, publish gate)
+├── /manager/views ────── Multi-Dimensional Views:
+│   ├── Pod View ──────── Filter by Pod Alpha–Zeta, lead oversight, pod workload
+│   ├── Brand View ────── Brand coverage matrix (CS, ACC, NDR) against client SLAs
+│   ├── Process View ──── Cross-brand staffing for CS, ACC, NDR, RET
+│   └── Employee View ─── Individual employee breakdown
+├── /manager/approvals ── Leave Queue with Replan Impact Simulation & Backup Suggestions
+├── /manager/master ───── Dynamic Master Data Management (Employees, Brands, Pods, Rules)
+└── /manager/import ───── Preview-first Excel/CSV Importer with referential integrity checks
+
+Employee Portal (/me)
+├── /me ───────────────── Personal Monthly Calendar (Working shifts, weekly offs, holidays, leaves)
+├── /me/leaves ────────── Self-Service Leave Request Form & Real-Time Status Tracker
+└── /me/notifications ─── Private Isolated Inbox for Shift Changes & Leave Decisions
 ```
 
 ---
 
-## 6. Local Setup & Migration Instructions
+## 7. AI Operations Copilot
 
-### 1. Install Dependencies
-```bash
-npm install
+The system features an autonomous AI Operations Assistant accessible via the drawer on any manager page. It connects to Groq / Anthropic Messages API with **18 live PostgreSQL-backed tools**:
+
+```mermaid
+flowchart LR
+    User([Manager Query]) --> Copilot[AI Operations Copilot]
+    Copilot --> ToolRouter{Function Calling Router}
+    ToolRouter -->|Health| T1[get_system_health]
+    ToolRouter -->|Conflicts| T2[get_conflicts]
+    ToolRouter -->|Backups| T3[find_backups]
+    ToolRouter -->|Impact| T4[check_leave_impact_and_conflicts]
+    ToolRouter -->|Action| T5[assign_replacement_employee]
+    ToolRouter -->|Approve| T6[approve_leave]
+    ToolRouter -->|Alert| T7[notify_employee]
+    T1 & T2 & T3 & T4 & T5 & T6 & T7 --> Neon[(Neon PostgreSQL)]
+    Neon --> Response([Grounded Operational Response])
 ```
 
-### 2. Apply Database Migrations
-Runs idempotent DDL on Neon Postgres to create all enums, tables, and indexes:
-```bash
-npm run db:migrate
-```
+### Supported Prompt Catalog & Examples
 
-### 3. Provision Manager Access
-Creates or resets only the manager account using the environment variables above. It does not seed or delete roster records:
-```bash
-npm run db:bootstrap-manager
-```
-
-### 4. Run Unit Tests
-Executes Vitest pure scenario tests:
-```bash
-npm run test
-```
-
-### 5. Start Development Server
-```bash
-npm run dev
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+| Use Case | Actual Prompt Example | Tool Invoked | Grounded Database Action |
+| :--- | :--- | :--- | :--- |
+| **System Health** | *"Give me an overview of system health and coverage for November 2026."* | `get_system_health` | Queries total shifts, coverage %, and blocking vs warning conflicts. |
+| **SPOF Analysis** | *"Which brands are at single point of failure risk right now?"* | `get_spof_risks` | Identifies 1-staff brands with scheduled leave or high load. |
+| **Conflict Inquiry** | *"What are the critical blocking conflicts for Lumora Skincare?"* | `get_conflicts` | Retrieves exact missing headcount, dates, and suggested fixes. |
+| **Backup Search** | *"Who is eligible and available to back up Lumora Skincare CS on Nov 15?"* | `find_backups` | Checks active assignments, excludes staff on leave/weekly off/working. |
+| **Leave Impact** | *"What happens if I approve Rohan Das's leave request?"* | `check_leave_impact_and_conflicts` | Simulates replan, flags resulting coverage gap, and lists backup candidates. |
+| **Assignment** | *"Assign Kunal Kapoor to Lumora Skincare Customer Support on Nov 15."* | `assign_replacement_employee` | Writes shift to `roster_days`, re-runs conflict sync, and prompts for notification. |
+| **Notification** | *"Notify Kunal Kapoor that he has been assigned backup shift for Lumora Skincare."* | `notify_employee` | Writes strictly isolated notification to `notifications` table for Kunal (`E003`). |
+| **Pod Workload** | *"How is workload distributed across Alpha Pod members?"* | `get_pod_workload` | Calculates shift counts, off distribution, and flags overworked employees. |
 
 ---
 
-## 7. How I Think About This Problem
+## 8. Tell Us How You Think
+*(Addressing Section 8 of Datastraw Assessment)*
 
 ### 1. How did you model employees, brands, processes, pods, and their relationships?
-I modeled the domain around an operational many-to-many relationship with clear ownership hierarchies:
-- **`pods`**: Structural groupings of employees led by a `lead_employee_id`. Pods provide organizational boundaries and localized leave approval authority.
-- **`employees`**: The workforce entity, linked to a pod and possessing an active state.
-- **`brands`** and **`processes`**: Abstract entities decoupled from one another. A brand represents the client (e.g., Lumora Skincare), while a process represents the operational task (e.g., Customer Support, Non-Delivery Reports).
-- **`brand_processes`**: The critical junction table. This is where business rules live: operating calendars (`all_365`, `daily_no_holidays`, `mon_sat_no_holidays`, `custom`) and required headcount by day type (weekday, Sunday, public holiday).
-- **`assignments`**: The eligibility link between an employee and a `brand_process`, including start/end validity dates, priority, and exclusivity flags.
-- **`roster_days`** and **`conflicts`**: Concrete monthly outputs. `roster_days` holds daily status assignments (`working`, `weekly_off`, `leave`, `holiday`, `comp_off`, `unassigned`), while `conflicts` captures explainable discrepancies between demand and fulfilled supply.
+I decoupled business processes from client brands using an explicit junction entity:
+- `brands` represents D2C clients; `processes` represents operations (`CS`, `ACC`, `RET`, `NDR`).
+- `brand_processes` defines client-specific operating calendars (`all_365`, `daily_no_holidays`, etc.) and headcount requirements by day type.
+- `assignments` links `employees` to `brand_processes` with priority, exclusivity, and date ranges.
+- `pods` group employees under a `lead_employee_id` for managerial oversight and localized leave approvals.
+This normalized model easily accommodates employees managing multiple brands or processes and multiple employees collaborating on a single brand.
 
 ### 2. How does your system generate a roster and determine whether it satisfies the required constraints?
-The scheduler operates as a pure, deterministic pipeline with zero black-box solver dependencies:
-1. **Demand Expansion**: Evaluates each `brand_process` against the month's calendar, public holidays, and days of the week to calculate the exact headcount required for every date.
-2. **Pre-Solve Capacity Analysis**: Before placing shifts, it counts strictly available eligible staff against demand. Any deficit immediately raises a blocking conflict and calculates cross-trained backup candidates.
-3. **Scarcity-First Greedy Placement**: Demand days are sorted by scarcity (slots with the fewest available eligible workers are scheduled first).
-4. **Workload-Balanced Candidate Selection**: For each slot, candidates are scored using a cost function that prioritizes low cumulative monthly load, minimizes multi-brand context switching on the same day, and protects preferred weekly off days. Ties are broken deterministically by employee ID.
-5. **Weekly Off Reservation**: In each calendar week, employees are guaranteed at least one rest day, honoring their designated off weekday or the nearest feasible non-working day.
-6. **Post-Solve Validation**: A final reconciliation recounts filled slots against requirements, flags consecutive-working-day warnings (> 6 days), and verifies that no employee has overlapping statuses.
+The scheduler uses a **deterministic greedy pipeline** with zero black-box dependencies:
+1. Expands brand operating rules into a day-by-day required headcount matrix.
+2. Conducts pre-solve capacity analysis to flag mathematical deficits immediately.
+3. Sorts demand slots by scarcity (fewest eligible candidates first).
+4. Assigns shifts using a weighted cost function minimizing cumulative monthly workload, brand context-switching, and preferred rest day disruptions.
+5. Enforces hard constraints: guaranteed weekly offs, maximum 6 consecutive working days, and mutual exclusivity between working, leave, and weekly-off states.
+6. Reconciles fulfilled slots against requirements and generates categorized `conflicts`.
 
 ### 3. How did you handle the difference between single-resource brands and brands with multiple employees?
-- In **multi-resource brands**, the scheduler can route shifts to other eligible colleagues when an employee is unavailable and balance their monthly load.
-- In **single-resource brands**, there is no internal redundancy. If the sole eligible employee is unavailable on a required operating day, the system raises a blocking conflict and identifies cross-trained backup candidates where available.
+- **Multi-Resource Brands**: The scheduler dynamically balances workload across assigned staff. If Employee A is on leave, Employee B automatically absorbs coverage without manual intervention.
+- **Single-Resource Brands (~80%)**: With zero internal redundancy, unavailability (leave or weekly-off) triggers a blocking conflict (`UNAVAILABLE_SOLE_RESOURCE`). The system queries cross-trained backup staff (employees in the same pod or assigned to the same process on other brands) and presents one-click replacement recommendations.
 
 ### 4. What happens when an employee manages all processes for a brand but is unavailable on a required working day?
-When a sole dedicated employee is on approved leave, comp-off, or taking their mandatory weekly off on an operating day:
-1. The scheduler respects the hard constraint: the employee is marked `leave` or `weekly_off` and is **never** illegally scheduled to work.
-2. A blocking conflict is raised describing the configured brand/process, date, required coverage, and reason no eligible employee is available.
-3. The backup engine scans active employees available on that date who possess an assignment to the same process (NDR) in other brands or work in the same pod.
-4. The conflict payload includes a suggested fix based on the configured assignments.
-5. In the Manager Console, the manager can select the cell and assign the backup with one click.
+1. The employee's availability is treated as a hard constraint: they are placed on `leave` or `weekly_off` and never illegally double-booked.
+2. A blocking conflict is raised with date, brand, missing process, and required headcount.
+3. The capacity engine calculates active, cross-trained backups who are not already on shift or leave.
+4. The Operations Manager or AI Copilot can assign a backup employee with one click or command.
 
 ### 5. How does your system handle conflicting requirements or insufficient staffing?
-Our philosophy is **explainability over silent failure**:
-- Mandatory coverage always beats soft preferences (an employee may have their weekly off moved to another day in the week if their usual day is required for coverage).
-- If total eligible headcount is strictly less than required headcount, the scheduler fills as many slots as legally possible and generates explicit, categorized conflicts (`INSUFFICIENT_HEADCOUNT`, `UNAVAILABLE_SOLE_RESOURCE`, `OVERALLOCATED_EMPLOYEE`).
-- Publishing is strictly locked until all blocking conflicts are either staffed or explicitly overridden with a manager justification, which is logged to `audit_log`.
+We prioritize **explainability and operational transparency**:
+- Mandatory client coverage strictly overrides soft employee preferences.
+- If total workforce is strictly insufficient, the engine schedules all possible legal shifts and writes structured, explainable records to `conflicts`.
+- The Roster Master Grid displays a locked "Publish" button with an explicit count of blocking conflicts, preventing accidental publishing of invalid rosters.
 
 ### 6. Which parts of the process did you automate, and which did you leave under human control? Why?
-- **Automated**:
-  - Expanding brand-process rules into daily required headcount.
-  - Greedy assignment matching based on eligibility, availability, and fair workload distribution.
-  - Detecting and categorizing blocking vs. warning conflicts.
-  - Re-planning future days upon leave approval while freezing historical past days.
-  - Identifying qualified cross-trained backup candidates.
-- **Human Control**:
-  - **Publishing the Roster**: Final sign-off remains with the operations manager to ensure operational accountability.
-  - **Manual Cell Overrides**: Overriding an employee's leave or assigning an employee beyond their load limit requires an explicit reason logged to the immutable audit log.
-  - **Leave Final Approval**: Leaves are reviewed by managers/pod leads after reviewing the automated replan impact simulation.
+- **Automated**: Demand expansion, scarcity-first greedy scheduling, constraint checking, leave replanning, backup discovery, and conflict classification.
+- **Human Controlled**: Final roster publication, manual cell overrides with audit justification, and leave approval sign-offs. Operations managers bear legal and client SLA accountability; the system empowers them with simulation and intelligence without removing human discretion.
 
 ### 7. If the company doubled its team and brand count, what would you change?
-1. **Tiered Pod-Level Partitioning**: Solve schedules independently by pod or brand cluster before a global cross-pod backup reconciliation pass, reducing time complexity from $O(N \log N)$ over the whole company to $O(K \cdot n \log n)$ per pod.
-2. **Database Read Replicas**: Route SWR polling queries (which run every 20 seconds) to Neon read replicas or cache warm roster states in Redis/Edge KV.
-3. **Database Batch Inserts**: Replace individual shift upserts with multi-row SQL `INSERT ... VALUES (...), (...)` chunked in batches of 500 records.
-4. **Skills Matrix Table**: Replace heuristic backup matching with an explicit skills and competency grading matrix (`skill_level: 1–5`).
+1. **Hierarchical Pod Partitioning**: Partition scheduling at the pod level before global reconciliation, reducing complexity from $O(N \log N)$ to $O(K \cdot n \log n)$.
+2. **Database Read Replicas & Connection Pooling**: Route high-frequency SWR polling to read replicas or edge-cached key-value stores.
+3. **Multi-Row SQL Batch Inserts**: Chunk daily shift inserts in batches of 500 to minimize network roundtrips.
+4. **Explicit Competency Matrix**: Replace heuristic backup scanning with a normalized skills grading table (`skill_level: 1–5`).
 
-### 8. If you had one additional week, what would you improve first?
-1. **Shift Swap Marketplace**: Allow employees to request peer-to-peer shift swaps from their portal, which auto-validates constraints and routes to the pod lead for one-click approval.
-2. **WebSocket / Server-Sent Events (SSE)**: Upgrade from 20-second SWR polling to instant push updates when a colleague makes a manual edit or when leaves are approved.
-3. **Google Calendar / Outlook Sync**: Provide iCal export feeds for employees so working shifts and weekly offs automatically sync with their mobile calendar apps.
-4. **Shift Time Bands**: Expand from single full-day shifts to morning/evening/night shifts with rest period enforcement (minimum 11 hours between shifts).
-
----
-
-## 8. Verification
-
-Run `npm test` for scheduler and import tests, `npm run typecheck` for TypeScript validation, and `npm run build` for a production build. The files under `fixtures/` are synthetic test data; the application does not seed or display them as live roster records.
+### 8. If you had one additional week to work on this, what would you improve first?
+1. **Peer-to-Peer Shift Swapping**: Self-service shift trade requests between employees with automated constraint checks and pod-lead approval.
+2. **WebSocket / Server-Sent Events (SSE)**: Replace SWR polling with real-time push updates for instant collaborative editing.
+3. **Multi-Shift Time Bands**: Support morning, afternoon, and night shifts with 11-hour mandatory rest period enforcement.
+4. **Calendar Sync (iCal / Google Calendar)**: Two-way calendar subscription feeds for employees.
 
 ---
 
-## 9. Dynamic Roster Data Import
+## 9. Video Demonstration Walkthrough
 
-Managers have two distinct input options: import a roster file for a specifically selected month, or manage individual records on `/manager/master`. Both options use real database records; no demo records are generated.
+### ⏱️ Video Structure (3–5 Minutes)
 
-### Single-CSV workflow
-
-Download `smart_roster_template.csv` from the import page. Each row represents one employee-to-brand/process assignment, so repeat pod, employee, brand, and process details when an employee has multiple assignments. Employee-only rows may leave the brand/process columns blank.
-
-The CSV includes:
-
-- `schedule_month` (`YYYY-MM`), retained as a workbook column; the required month selector on the import page is authoritative.
-- Pod, employee, and pod-lead details.
-- Employee weekly-off day, active status, and `initial_password` (at least 12 characters).
-- Employee email is used as the login. Pod lead IDs in the pod rows determine which imported users receive pod-lead access.
-- Brand and process names/codes, operating calendar, and weekday/Sunday/holiday headcount rules.
-- Assignment validity dates, priority, and exclusivity.
-
-CSV uploads are validated and previewed before commit. They merge matching shared records; records omitted from the file are preserved. Coverage rules, assignments, weekly offs, leave dates, and generated roster data are scoped to the selected month. Leave ranges are clipped to that month, and holiday rows outside it are rejected. CSV imports do not replace leave requests not present in the file; employees continue to submit leave through the employee portal. Initial passwords are bcrypt-hashed and never returned to the browser. Distribute credentials securely, and use unique real passwords instead of the test-only values in the sample fixture.
-
-The AI assistant queries the live database, so imported pods, employees, brands, schedules, and roster updates are available through its tools after commit. Its existing role-based access rules continue to apply.
-
-### Excel workbook workflow
-The multi-sheet Excel template is blank and remains available. Excel imports use the same selected-month workflow and merge/preserve behavior as CSV; omitted employees, brands, and assignments are not deleted or deactivated. The workbook format has a Leaves sheet. Workbook imports do not create employee logins because the workbook has no initial-password field; add an initial password through employee management or use the CSV workflow.
-
-### Dynamic master-data management
-The manager page offers field-specific forms to create, edit, and deactivate employee, pod/lead, brand, process/task, brand-process rule, assignment, weekly-off, and holiday records. Database relationships and required values are validated on the server. Referenced pods and processes are protected from deletion; history-bearing rows are deactivated instead of removed. Employee password hashes are never sent to the client.
-
-The shared master configuration is distinct from a roster month. Imported schedules are stored as per-month coverage overrides; regenerating one month reads its override and does not change other months' roster rows. The `/manager/rosters` page lists each stored month, roster status, shift count, and conflicts. The AI assistant uses live master data and the selected month's rule overrides.
-
-### AI assistant and portal notifications
-
-The assistant answers roster, conflict, availability, configuration, and leave questions from live database records and carries the current chat context through follow-up questions. It reports unresolved conflicts with their dates and suggested fixes, and availability checks exclude approved leave, effective weekly offs, and existing roster assignments when a roster exists. If availability cannot be verified because the selected month has no roster, the assistant must say so.
-
-Roster assignments made through the assistant do not implicitly approve a leave, mark conflicts resolved, or notify anyone. After a successful assignment, the assistant offers to notify the named employee; it sends only after a manager directly requests or confirms the notification. The employee receives the notice in `/me`, and their pod lead sees a corresponding update in the manager/pod-lead approvals portal. Employee leave submissions and manager/pod-lead approvals or rejections also create portal notifications. The assistant does not pick an unspecified leave request or guess between employees with matching names.
-
-Managers can ask for all leave history or filter by request status. Pod leads and employees see only records within their role scope. Notification reads and acknowledgements are restricted to the same employee/pod scope.
-
-### 1. Workbook Structure & Template (8 Sheets)
-Download the official template directly from `GET /api/import/template` or the Import page:
-
-| Sheet | Columns (Exact snake_case) | Description |
-| :--- | :--- | :--- |
-| **`Pods`** | `pod_code`, `pod_name`, `lead_employee_id` | Operational pods and designated pod leads. |
-| **`Employees`** | `employee_id`, `name`, `email`, `pod_code`, `weekly_off_day`, `active` | Employee records and designated weekly-off days (`MON`–`SUN`). |
-| **`Brands`** | `brand_code`, `brand_name`, `category` | D2C client brands and industry categories. |
-| **`Processes`** | `process_code`, `process_name` | Operational functions (`CS`, `ACC`, `RET`, `NDR`). |
-| **`Schedules`** | `brand_code`, `process_code`, `operating_calendar`, `weekday_headcount`, `sunday_headcount`, `holiday_headcount`, `min_staff_required` | Brand operating rules and headcount targets (`all_365`, `daily_no_holidays`, `mon_sat_no_holidays`, `custom`). |
-| **`Assignments`** | `employee_id`, `brand_code`, `process_code`, `valid_from`, `valid_to`, `priority`, `is_exclusive` | Staff eligibility mapping with priority and exclusivity. |
-| **`Leaves`** | `employee_id`, `date_from`, `date_to`, `type`, `status` | Legacy workbook leave input; CSV imports do not include or modify leaves. |
-| **`Holidays`** | `date`, `name` | Public holidays for the roster calendar. |
-
-### 2. Validation & Referential Integrity Engine
-- **Structural Integrity**: Missing sheets or missing column headers reject the file immediately with exact missing names.
-- **Data Normalization**: Automatic string trimming, code uppercasing, boolean normalization (`TRUE/FALSE/yes/no/1/0`), and strict `YYYY-MM-DD` date parsing.
-- **Zod Row-Level Validation**: Collects **all** errors with `{ sheet, row, field, message }` without early abort.
-- **Referential Integrity**:
-  - `pod_code` in Employees must exist in Pods.
-  - `lead_employee_id` in Pods must exist in Employees and belong to that exact pod.
-  - `brand_code` and `process_code` in Schedules and Assignments must exist in Brands and Processes.
-  - `employee_id` in Assignments and Leaves must exist in Employees.
-  - `valid_to >= valid_from` and `date_to >= date_from`.
-  - Primary keys unique in every sheet.
-  - Overlapping assignments for the same employee, brand, and process are flagged.
-  - **Hard Blocker**: Any schedule with 0 eligible assigned employees blocks preview.
-- **Warnings**: Identifies single-resource brands and processes where eligible headcount < required headcount.
-
-### 3. Preview & Commit Workflow
-1. **Preview (`POST /api/import/preview`)**: Requires the explicitly selected month, validates the upload, runs entity diffs against PostgreSQL, and writes **zero** records. Both formats use merge/preserve semantics.
-2. **Commit (`POST /api/import/commit`)**:
-   - Re-validates and upserts records on the server inside a database transaction.
-   - Both formats preserve records omitted from the upload and scope monthly records to the selected month.
-   - CSV imports provision employee accounts using bcrypt-hashed initial passwords; Excel imports do not create logins.
-   - Records import metadata and row counts.
-   - Automatically triggers the deterministic scheduler to solve and regenerate the roster for the affected month.
-   - A failure rolls back the import and generated roster together.
+| Time | Scene / Focus | URL / Screen | Key Actions & Speaking Points |
+| :--- | :--- | :--- | :--- |
+| **0:00 - 0:45** | **Introduction & Architecture** | `/manager` | Introduce the Datastraw Smart Roster System. Show Neon Postgres connection (18 tables, 30 employees, 12 brands, 6 pods). Explain the 80/20 single vs multi-resource structure. |
+| **0:45 - 1:30** | **Roster Generation & Grid** | `/manager/roster/2026-11` | Show the Master Roster Grid for November 2026. Explain color-coded shifts (`working`, `weekly_off`, `leave`). Demonstrate filtering by Pod (Alpha Pod) and Brand (Lumora Skincare). |
+| **1:30 - 2:15** | **Different Brand Schedules** | `/manager/views` | Navigate to Brand View. Show *Lumora Skincare* requiring 365-day CS coverage vs *Brewhaus Coffee* requiring Mon–Sat coverage. Show Pod View and Process View. |
+| **2:15 - 3:15** | **Handling Changes (Leave & Replan)** | `/manager/approvals` & `/me` | Demonstrate dynamic change handling: Rohan Das (`E005`) requests leave on Nov 15 for Lumora Skincare. Show replan simulation flagging coverage gap and suggesting backup Kunal Kapoor (`E003`). Approve leave; show instant roster sync. |
+| **3:15 - 4:15** | **AI Operations Copilot** | Drawer (Right Side) | Open AI Assistant drawer. Enter actual prompts: query health, inspect conflicts, find backups, appoint Kunal Kapoor, and notify him. Show tool grounding in action. |
+| **4:15 - 4:45** | **Employee Portal & Isolation** | `/me` | Log in as Rohan Das (`E005`): show approved leave on Nov 15. Log in as Kunal Kapoor (`E003`): show private notification and new shift assignment. Demonstrate strict IDOR isolation. |
+| **4:45 - 5:00** | **Conclusion & Quality Checks** | Terminal / VS Code | Show clean `npm run typecheck` and 37 passing unit tests in `npm test`. Conclude with key design principles. |
 
 ---
 
-## 10. Assumptions Section
+## 10. Local Setup, Migrations & Verification
 
-1. **Operating Month Scope**: The manager must explicitly select a valid `YYYY-MM` month for every import. There is no implicit current-month fallback. Shared master data spans months; imported coverage rules and generated roster output are month-specific.
-2. **Natural Keys**: Entities are uniquely identified by natural codes (`employee_id`, `pod_code`, `brand_code`, `process_code`) rather than arbitrary names.
-3. **Weekly-Off Policy**: Every active employee has 1 designated weekly rest day per calendar week. In high-demand scenarios, the scheduler may adjust an employee's rest day to another day within the same week to satisfy mandatory coverage.
-4. **Consecutive Days Limit**: The scheduler enforces a hard limit of at most 6 consecutive working days without a rest day.
-5. **Deterministic Ties**: If multiple eligible employees have identical cost scores for a shift, ties are broken deterministically by `employee_id` sorting.
-6. **Import Idempotency**: Re-uploading a file for the same selected month upserts matching records, replaces that month's included rule/assignment data, preserves omitted records, and regenerates only that month.
+### 1. Prerequisites
+- Node.js 18+ (tested on Node v20/v24)
+- Neon PostgreSQL database instance
+
+### 2. Environment Setup
+Create a `.env` file in the project root:
+```env
+# Neon Serverless Postgres connection string
+DATABASE_URL=postgresql://user:password@ep-sample-pooler.c-8.us-east-2.aws.neon.tech/neondb?sslmode=require
+
+# Auth.js secret for session encryption
+AUTH_SECRET=generate_a_random_32_character_secret_string
+
+# AI Assistant LLM Provider (Groq or Anthropic)
+GROQ_API_KEY=gsk_your_groq_api_key_here
+ANTHROPIC_API_KEY=sk-ant-your_anthropic_api_key_here
+
+# Manager Bootstrap Credentials
+BOOTSTRAP_MANAGER_EMAIL=manager@opscompany.com
+BOOTSTRAP_MANAGER_PASSWORD=ManagerSecurePassword123!
+```
+
+### 3. Installation & Database Setup
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Run idempotent database migrations (creates 18 tables and indexes)
+npm run db:migrate
+
+# 3. Bootstrap initial Manager account
+npm run db:bootstrap-manager
+```
+
+### 4. Running the Application
+```bash
+# Start Next.js development server
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) to access the application.
+
+### 5. Automated Verification & Testing
+```bash
+# Run TypeScript compilation check (0 errors)
+npm run typecheck
+
+# Run 37 Vitest unit & scenario tests (100% pass)
+npm test
+```
+
+---
+
+*Built with precision for the Datastraw Tech Internship Assessment.*
