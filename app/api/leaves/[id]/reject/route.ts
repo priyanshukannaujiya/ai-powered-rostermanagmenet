@@ -70,7 +70,7 @@ export async function POST(
       tx`
         INSERT INTO notifications (id, employee_id, title, message, type, date, metadata, read, created_at, updated_at)
         SELECT ${notifId}, ${leave[0].employee_id}, 'Leave request rejected', ${notifMessage}, 'leave_rejected', ${startDate}, ${notifMeta}::jsonb, false, now(), now()
-        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'rejected' AND reviewed_by = ${user!.id} AND reviewed_at = ${reviewedAt}::timestamptz);
+        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'rejected' AND reviewed_by = ${user!.id} AND reviewed_at = transaction_timestamp());
       `,
     ]);
 
