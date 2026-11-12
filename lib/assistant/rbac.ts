@@ -6,6 +6,7 @@ const POD_LEAD_SCOPED_TOOLS = new Set([
   "get_leave_requests",
   "get_employee_schedule",
   "get_roster_configuration",
+  "get_conflicts",
   "approve_leave",
 ]);
 
