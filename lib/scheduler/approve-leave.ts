@@ -104,7 +104,7 @@ export async function approveLeaveAndReplan({
 
   // Check which affected months already have generated rosters
   const generatedMonths = affectedMonthIds.length
-    ? await sql`SELECT id, month FROM roster_months WHERE id = ANY(${affectedMonthIds});`
+    ? await sql`SELECT id, month, updated_at FROM roster_months WHERE id = ANY(${affectedMonthIds});`
     : [];
   const generatedMonthSet = new Set(generatedMonths.map((r: any) => r.month));
 
@@ -119,8 +119,9 @@ export async function approveLeaveAndReplan({
       `;
       if (!updateResult || updateResult.length === 0) {
         return {
-          success: true,
-          message: `This leave request was already approved or reviewed concurrently by another manager.`,
+          success: false,
+          error: "This leave request was already approved or reviewed concurrently by another manager.",
+          status: 409,
           leave,
         };
       }
@@ -326,6 +327,15 @@ export async function approveLeaveAndReplan({
     };
   }
 
+  // Optimistic month-level concurrency guard: every affected roster month must
+  // still have the version read while building this replan. Concurrent approvals
+  // that planned from the same version cannot both commit stale roster changes.
+  const rosterVersionToken = new Date().toISOString();
+  const expectedRosterVersions = generatedMonths.map((row: any) => ({
+    id: row.id,
+    updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+  }));
+
   // 5. Claim and roster writes run in the same database transaction.
   // Every subsequent write is guarded by this unique review timestamp so a
   // competing approval cannot modify the roster if its claim affects zero rows.
@@ -335,9 +345,37 @@ export async function approveLeaveAndReplan({
     txResults = await sql.transaction((tx) => {
       const txStmts: any[] = [];
       txStmts.push(tx`
+        WITH expected AS (
+          SELECT * FROM jsonb_to_recordset(${JSON.stringify(expectedRosterVersions)}::jsonb)
+            AS x(id text, updated_at timestamptz)
+        ),
+        locked AS MATERIALIZED (
+          SELECT rm.id
+          FROM roster_months rm
+          JOIN expected e ON e.id = rm.id AND e.updated_at = rm.updated_at
+          ORDER BY rm.id
+          FOR UPDATE
+        ),
+        guard AS (
+          SELECT COUNT(*) = ${expectedRosterVersions.length} AS ok FROM locked
+        )
+        UPDATE roster_months rm
+        SET updated_at = ${rosterVersionToken}::timestamptz
+        FROM locked
+        WHERE rm.id = locked.id AND (SELECT ok FROM guard)
+        RETURNING rm.id;
+      `);
+      txStmts.push(tx`
         UPDATE leaves
         SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = transaction_timestamp(), updated_at = now()
-        WHERE id = ${leaveId} AND status = 'pending'
+        WHERE id = ${leaveId}
+          AND status = 'pending'
+          AND (
+            SELECT COUNT(*) = ${expectedRosterVersions.length}
+            FROM roster_months
+            WHERE id = ANY(${affectedMonthIds})
+              AND updated_at = ${rosterVersionToken}::timestamptz
+          )
         RETURNING id;
       `);
 

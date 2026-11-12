@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
@@ -15,7 +16,6 @@ import {
 
 import { formatDateOnly } from "@/lib/date-utils";
 import { isValidRosterMonth } from "@/lib/import/month";
-import { syncRosterConflicts } from "@/lib/scheduler/sync-conflicts";
 
 export const dynamic = "force-dynamic";
 
@@ -102,44 +102,6 @@ export async function GET(
           ORDER BY c.severity DESC, c.date ASC;
         `
       : [];
-
-    if (rosterMonth && conflictsRaw.length === 0 && days.length > 0) {
-      try {
-        await syncRosterConflicts(sql, month);
-        conflictsRaw = await sql`
-          SELECT c.*, b.name as brand_name, p.code as process_code, e.name as employee_name
-          FROM conflicts c
-          LEFT JOIN brand_processes bp ON c.brand_process_id = bp.id
-          LEFT JOIN brands b ON bp.brand_id = b.id
-          LEFT JOIN processes p ON bp.process_id = p.id
-          LEFT JOIN employees e ON c.employee_id = e.id
-          WHERE c.roster_month_id = ${rosterMonth.id}
-            AND (
-              ${user!.role} = 'manager'
-              OR EXISTS (
-                SELECT 1 FROM employees scoped_employee
-                JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-                WHERE scoped_employee.id = c.employee_id
-                  AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
-              )
-              OR (
-                c.employee_id IS NULL
-                AND EXISTS (
-                  SELECT 1 FROM assignments scoped_assignment
-                  JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
-                  JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-                  WHERE scoped_assignment.brand_process_id = c.brand_process_id
-                    AND scoped_assignment.active = true
-                    AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
-                )
-              )
-            )
-          ORDER BY c.severity DESC, c.date ASC;
-        `;
-      } catch (syncErr) {
-        console.error("Auto sync conflicts warning:", syncErr);
-      }
-    }
 
     const conflictsList = conflictsRaw.map((c: any) => ({
       ...c,
@@ -260,12 +222,6 @@ export async function POST(
   const sql = neon(process.env.DATABASE_URL!);
 
   try {
-    // Check if month already exists; if published, reset status to draft for fresh solve
-    const existingMonth = await sql`SELECT * FROM roster_months WHERE month = ${month} LIMIT 1;`;
-    if (existingMonth.length > 0 && existingMonth[0].status === "published") {
-      await sql`UPDATE roster_months SET status = 'draft', updated_at = now() WHERE month = ${month};`;
-    }
-
     // Fetch master data needed for scheduler
     const employeesRaw = await sql`SELECT id, name, email, pod_id, active FROM employees WHERE active = true;`;
     const bpRaw = await sql`
@@ -364,43 +320,46 @@ export async function POST(
       compOffs,
     });
 
-    // Save into Database
+    // Persist the complete generated roster atomically. A failure in any
+    // delete/insert/audit statement rolls the entire generation back.
     const monthId = `roster-${month}`;
-    await sql`
-      INSERT INTO roster_months (id, month, status, generated_at, updated_at)
-      VALUES (${monthId}, ${month}, 'draft', now(), now())
-      ON CONFLICT (month) DO UPDATE SET generated_at = now(), updated_at = now();
-    `;
+    const txResults = await sql.transaction((tx) => {
+      const statements: any[] = [
+        tx`
+          INSERT INTO roster_months (id, month, status, generated_at, updated_at)
+          VALUES (${monthId}, ${month}, 'draft', now(), now())
+          ON CONFLICT (month) DO UPDATE
+          SET status = 'draft', generated_at = now(), updated_at = now();
+        `,
+        tx`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND pinned = false;`,
+        tx`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`,
+      ];
 
-    // Clear previous unpinned days and conflicts for this month
-    await sql`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND pinned = false;`;
-    await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
+      for (const day of scheduleResult.days) {
+        const rdId = `rd-${monthId}-${day.employeeId}-${day.date}-${day.brandProcessId || "none"}`;
+        statements.push(tx`
+          INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
+          VALUES (${rdId}, ${monthId}, ${day.employeeId}, ${day.date}, ${day.status as any}, ${day.brandProcessId || null}, ${day.pinned || false}, ${day.notes || null}, now(), now())
+          ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
+          DO UPDATE SET status = EXCLUDED.status, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
+        `);
+      }
 
-    // Insert newly generated roster days
-    for (const day of scheduleResult.days) {
-      const rdId = `rd-${monthId}-${day.employeeId}-${day.date}-${day.brandProcessId || "none"}`;
-      await sql`
-        INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-        VALUES (${rdId}, ${monthId}, ${day.employeeId}, ${day.date}, ${day.status as any}, ${day.brandProcessId || null}, ${day.pinned || false}, ${day.notes || null}, now(), now())
-        ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
-        DO UPDATE SET status = EXCLUDED.status, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
-      `;
-    }
+      for (const c of scheduleResult.conflicts) {
+        const cId = `cf-${monthId}-${c.id}`;
+        statements.push(tx`
+          INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
+          VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now());
+        `);
+      }
 
-    // Insert generated conflicts
-    for (const c of scheduleResult.conflicts) {
-      const cId = `cf-${monthId}-${c.id}`;
-      await sql`
-        INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
-        VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now());
-      `;
-    }
+      statements.push(tx`
+        INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
+        VALUES (${`audit-${randomUUID()}`}, ${user?.id || null}, 'ROSTER_GENERATED', 'roster_months', ${monthId}, ${JSON.stringify(scheduleResult.metrics)}::jsonb, now(), now());
+      `);
+      return statements;
+    });
 
-    // Record audit log
-    await sql`
-      INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
-      VALUES (${`audit-${Date.now()}`}, ${user?.id || null}, 'ROSTER_GENERATED', 'roster_months', ${monthId}, ${JSON.stringify(scheduleResult.metrics)}, now(), now());
-    `;
 
     return NextResponse.json({
       success: true,
