@@ -109,13 +109,23 @@ export default function ApprovalsQueuePage() {
         showToast({
           type: json.notificationWarning ? "warning" : "success",
           title: "Leave Request Approved",
-          message: json.notificationWarning || `Approved leave and automatically replanned ${json.diff?.changedDays?.length || 0} future shift(s). The employee was notified.`,
+          message: json.message || `Approved leave for ${selectedLeave.employee_name}. The employee was notified.`,
         });
         setSelectedLeave(null);
         mutate();
         mutateNotifications();
         window.dispatchEvent(new CustomEvent("roster:refresh"));
         window.dispatchEvent(new CustomEvent("leave:refresh"));
+      } else if (json.error?.includes("already approved")) {
+        showToast({
+          type: "info",
+          title: "Already Approved",
+          message: `This leave request for ${selectedLeave.employee_name} is already approved.`,
+        });
+        setSelectedLeave(null);
+        mutate();
+        mutateNotifications();
+        window.dispatchEvent(new CustomEvent("roster:refresh"));
         window.dispatchEvent(new CustomEvent("leave:refresh"));
       } else {
         showToast({

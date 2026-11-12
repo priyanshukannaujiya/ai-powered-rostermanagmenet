@@ -69,17 +69,42 @@ export async function approveLeaveAndReplan({
   }
 
   const leave = leaveRows[0];
+  const startDate = formatDateOnly(leave.start_date);
+  const endDate = formatDateOnly(leave.end_date);
+  const month = startDate.slice(0, 7); // e.g. '2026-11'
+  const monthId = `roster-${month}`;
+
   if (leave.status !== "pending") {
+    if (leave.status === "approved") {
+      // Ensure the approved leave is pinned into roster_days if it was previously missed
+      for (const leaveDate of enumerateDateRange(startDate, endDate)) {
+        const dMonth = leaveDate.slice(0, 7);
+        const dMonthId = `roster-${dMonth}`;
+        const leaveDayId = `rd-${dMonthId}-${leave.employee_id}-${leaveDate}-leave`;
+        await sql`
+          DELETE FROM roster_days
+          WHERE roster_month_id = ${dMonthId}
+            AND employee_id = ${leave.employee_id}
+            AND date = ${leaveDate};
+        `;
+        await sql`
+          INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
+          VALUES (${leaveDayId}, ${dMonthId}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now())
+          ON CONFLICT (id) DO UPDATE SET status = 'leave', brand_process_id = NULL, pinned = true, notes = ${APPROVED_LEAVE_NOTE}, updated_at = now();
+        `;
+      }
+      return {
+        success: true,
+        message: `This leave request is already approved for ${leave.employee_name}.`,
+        leave,
+      };
+    }
     return {
       success: false,
       error: `This leave request is already ${leave.status}.`,
       status: 409,
     };
   }
-  const startDate = formatDateOnly(leave.start_date);
-  const endDate = formatDateOnly(leave.end_date);
-  const month = startDate.slice(0, 7); // e.g. '2026-11'
-  const monthId = `roster-${month}`;
 
   // 2. Pod lead scope check
   if (reviewerRole === "pod_lead") {
@@ -314,19 +339,27 @@ export async function approveLeaveAndReplan({
       AND date <= ${endDate};
   `;
 
-  // Insert updated days for other colleagues from the replan solver
-  for (const d of replanResult.updatedDays) {
-    if (d.date < startDate) continue;
-    // The absent employee's leave window is written deterministically below.
-    if (isDateOnApprovedLeave(d.date, d.employeeId, leave.employee_id, startDate, endDate)) continue;
+  // Insert updated days for other colleagues from the replan solver in concurrent chunks
+  const daysToInsert = replanResult.updatedDays.filter((d) => {
+    if (d.date < startDate) return false;
+    if (isDateOnApprovedLeave(d.date, d.employeeId, leave.employee_id, startDate, endDate)) return false;
+    return true;
+  });
 
-    const rdId = `rd-${monthId}-${d.employeeId}-${d.date}-${d.brandProcessId || "none"}`;
-    await sql`
-      INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-      VALUES (${rdId}, ${monthId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now())
-      ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
-      DO UPDATE SET status = EXCLUDED.status, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
-    `;
+  const chunkSize = 25;
+  for (let i = 0; i < daysToInsert.length; i += chunkSize) {
+    const chunk = daysToInsert.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(async (d) => {
+        const rdId = `rd-${monthId}-${d.employeeId}-${d.date}-${d.brandProcessId || "none"}`;
+        await sql`
+          INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
+          VALUES (${rdId}, ${monthId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now())
+          ON CONFLICT (id)
+          DO UPDATE SET status = EXCLUDED.status, brand_process_id = EXCLUDED.brand_process_id, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
+        `;
+      })
+    );
   }
 
   // Pin the approved leave itself as a dedicated 'leave' record for all leave dates.
@@ -347,12 +380,19 @@ export async function approveLeaveAndReplan({
     `;
   }
 
-  for (const c of replanResult.updatedConflicts) {
-    const cId = `cf-${monthId}-${c.id}`;
-    await sql`
-      INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
-      VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now());
-    `;
+  // Insert updated conflicts in concurrent chunks
+  for (let i = 0; i < replanResult.updatedConflicts.length; i += chunkSize) {
+    const chunk = replanResult.updatedConflicts.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(async (c) => {
+        const cId = `cf-${monthId}-${c.id}`;
+        await sql`
+          INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
+          VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now())
+          ON CONFLICT (id) DO UPDATE SET message = EXCLUDED.message, suggested_fix = EXCLUDED.suggested_fix, severity = EXCLUDED.severity, resolved = EXCLUDED.resolved, updated_at = now();
+        `;
+      })
+    );
   }
 
   // Audit log

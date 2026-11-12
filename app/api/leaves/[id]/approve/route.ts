@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth-helpers";
 import { approveLeaveAndReplan } from "@/lib/scheduler/approve-leave";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function POST(
   req: NextRequest,
