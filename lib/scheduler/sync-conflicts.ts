@@ -160,7 +160,7 @@ export async function syncRosterConflicts(sql: any, month: string): Promise<Conf
 
   // Replace the conflict snapshot atomically so dashboards never read a
   // partially refreshed set if an insert fails.
-  await sql.transaction((tx) => {
+  await sql.transaction((tx: any) => {
     const statements = [
       tx`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`,
       ...allConflicts.map((c) => {
