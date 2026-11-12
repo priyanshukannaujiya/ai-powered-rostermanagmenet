@@ -87,13 +87,16 @@ export async function GET(
                 WHERE scoped_employee.id = c.employee_id
                   AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
               )
-              OR EXISTS (
-                SELECT 1 FROM assignments scoped_assignment
-                JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
-                JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-                WHERE scoped_assignment.brand_process_id = c.brand_process_id
-                  AND scoped_assignment.active = true
-                  AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+              OR (
+                c.employee_id IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM assignments scoped_assignment
+                  JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+                  JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                  WHERE scoped_assignment.brand_process_id = c.brand_process_id
+                    AND scoped_assignment.active = true
+                    AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+                )
               )
             )
           ORDER BY c.severity DESC, c.date ASC;
@@ -119,13 +122,16 @@ export async function GET(
                 WHERE scoped_employee.id = c.employee_id
                   AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
               )
-              OR EXISTS (
-                SELECT 1 FROM assignments scoped_assignment
-                JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
-                JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-                WHERE scoped_assignment.brand_process_id = c.brand_process_id
-                  AND scoped_assignment.active = true
-                  AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+              OR (
+                c.employee_id IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM assignments scoped_assignment
+                  JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+                  JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                  WHERE scoped_assignment.brand_process_id = c.brand_process_id
+                    AND scoped_assignment.active = true
+                    AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+                )
               )
             )
           ORDER BY c.severity DESC, c.date ASC;
