@@ -231,13 +231,12 @@ export async function POST(
       VALUES (${monthId}, ${month}, 'draft', now(), now())
       ON CONFLICT (month) DO NOTHING;
     `;
-    const versionRows = await sql`SELECT updated_at FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
+    const versionRows = await sql`SELECT updated_at::text AS updated_at FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
     if (!versionRows.length) {
       throw new Error("Unable to initialize roster version for this month.");
     }
-    const expectedRosterVersion = versionRows[0].updated_at instanceof Date
-      ? versionRows[0].updated_at.toISOString()
-      : new Date(versionRows[0].updated_at).toISOString();
+    // Preserve PostgreSQL timestamp precision for an exact compare-and-swap.
+    const expectedRosterVersion = versionRows[0].updated_at;
     const generationToken = new Date().toISOString();
 
     // Fetch master data needed for scheduler
