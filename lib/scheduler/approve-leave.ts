@@ -81,45 +81,11 @@ export async function approveLeaveAndReplan({
   const affectedMonthIds = Array.from(leaveDatesByMonth.keys()).map((m) => `roster-${m}`);
 
   if (leave.status !== "pending") {
-    if (leave.status === "approved") {
-      // Ensure the approved leave is pinned into roster_days atomically for generated months
-      const existingMonths = affectedMonthIds.length
-        ? await sql`SELECT id, month FROM roster_months WHERE id = ANY(${affectedMonthIds});`
-        : [];
-      const existingMonthSet = new Set(existingMonths.map((r: any) => r.month));
-
-      if (existingMonthSet.size > 0) {
-        await sql.transaction((tx) => {
-          const txStmts: any[] = [];
-          for (const leaveDate of leaveDates) {
-            const dMonth = leaveDate.slice(0, 7);
-            if (!existingMonthSet.has(dMonth)) continue;
-            const dMonthId = `roster-${dMonth}`;
-            const leaveDayId = `rd-${dMonthId}-${leave.employee_id}-${leaveDate}-leave`;
-            txStmts.push(tx`
-              DELETE FROM roster_days
-              WHERE roster_month_id = ${dMonthId}
-                AND employee_id = ${leave.employee_id}
-                AND date = ${leaveDate};
-            `);
-            txStmts.push(tx`
-              INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-              VALUES (${leaveDayId}, ${dMonthId}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now())
-              ON CONFLICT (id) DO UPDATE SET status = 'leave', brand_process_id = NULL, pinned = true, notes = ${APPROVED_LEAVE_NOTE}, updated_at = now();
-            `);
-          }
-          return txStmts;
-        });
-      }
-      return {
-        success: true,
-        message: `This leave request is already approved for ${leave.employee_name}.`,
-        leave,
-      };
-    }
     return {
       success: false,
-      error: `This leave request is already ${leave.status}.`,
+      error: leave.status === "approved"
+        ? "This leave request is already approved or is currently being processed."
+        : `This leave request is already ${leave.status}.`,
       status: 409,
     };
   }
@@ -360,26 +326,22 @@ export async function approveLeaveAndReplan({
     };
   }
 
-  // 5. Upfront Atomic Claim for Concurrency Protection
-  const claimResult = await sql`
-    UPDATE leaves
-    SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = now(), updated_at = now()
-    WHERE id = ${leaveId} AND status = 'pending'
-    RETURNING id;
-  `;
-
-  if (!claimResult || claimResult.length === 0) {
-    return {
-      success: true,
-      message: `This leave request was already approved or reviewed concurrently by another manager.`,
-      leave,
-    };
-  }
+  // 5. Claim and roster writes run in the same database transaction.
+  // Every subsequent write is guarded by this unique review timestamp so a
+  // competing approval cannot modify the roster if its claim affects zero rows.
+  const claimAt = new Date().toISOString();
 
   // 6. Atomic, Transactional Roster Execution
+  let txResults: any[];
   try {
-    await sql.transaction((tx) => {
+    txResults = await sql.transaction((tx) => {
       const txStmts: any[] = [];
+      txStmts.push(tx`
+        UPDATE leaves
+        SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = ${claimAt}, updated_at = now()
+        WHERE id = ${leaveId} AND status = 'pending'
+        RETURNING id;
+      `);
 
       // 6a. Drop replannable future days and conflicts across all affected months
       for (const plan of plansByMonth) {
@@ -387,11 +349,13 @@ export async function approveLeaveAndReplan({
           DELETE FROM roster_days
           WHERE roster_month_id = ${plan.mId}
             AND date >= ${plan.cutoffDate}
-            AND pinned = false;
+            AND pinned = false
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
         `);
         txStmts.push(tx`
           DELETE FROM conflicts
-          WHERE roster_month_id = ${plan.mId};
+          WHERE roster_month_id = ${plan.mId}
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
         `);
       }
 
@@ -403,7 +367,8 @@ export async function approveLeaveAndReplan({
           WHERE roster_month_id = ${affMonthId}
             AND employee_id = ${leave.employee_id}
             AND date >= ${startDate}
-            AND date <= ${endDate};
+            AND date <= ${endDate}
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
         `);
       }
 
@@ -419,7 +384,8 @@ export async function approveLeaveAndReplan({
           const rdId = `rd-${plan.mId}-${d.employeeId}-${d.date}-${d.brandProcessId || "none"}`;
           txStmts.push(tx`
             INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-            VALUES (${rdId}, ${plan.mId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now())
+            SELECT ${rdId}, ${plan.mId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now()
+            WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz)
             ON CONFLICT (id)
             DO UPDATE SET status = EXCLUDED.status, brand_process_id = EXCLUDED.brand_process_id, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
           `);
@@ -429,7 +395,8 @@ export async function approveLeaveAndReplan({
           const cId = `cf-${plan.mId}-${c.id}`;
           txStmts.push(tx`
             INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
-            VALUES (${cId}, ${plan.mId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now())
+            SELECT ${cId}, ${plan.mId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now()
+            WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz)
             ON CONFLICT (id) DO UPDATE SET message = EXCLUDED.message, suggested_fix = EXCLUDED.suggested_fix, severity = EXCLUDED.severity, resolved = EXCLUDED.resolved, updated_at = now();
           `);
         }
@@ -446,11 +413,13 @@ export async function approveLeaveAndReplan({
           DELETE FROM roster_days
           WHERE roster_month_id = ${dMonthId}
             AND employee_id = ${leave.employee_id}
-            AND date = ${leaveDate};
+            AND date = ${leaveDate}
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
         `);
         txStmts.push(tx`
           INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-          VALUES (${leaveDayId}, ${dMonthId}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now())
+          SELECT ${leaveDayId}, ${dMonthId}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now()
+          WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz)
           ON CONFLICT (id) DO UPDATE SET status = 'leave', brand_process_id = NULL, pinned = true, notes = ${APPROVED_LEAVE_NOTE}, updated_at = now();
         `);
       }
@@ -474,19 +443,23 @@ export async function approveLeaveAndReplan({
           })},
           now(),
           now()
-        );
+        )
+        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
       `);
 
       return txStmts;
     });
   } catch (txError) {
-    // If the roster write transaction fails, roll back the leave status so it can be retried cleanly
-    await sql`
-      UPDATE leaves
-      SET status = 'pending', reviewed_by = NULL, reviewed_at = NULL, updated_at = now()
-      WHERE id = ${leaveId} AND status = 'approved';
-    `;
+    // The leave claim and roster changes roll back together.
     throw txError;
+  }
+
+  if (!txResults[0] || txResults[0].length === 0) {
+    return {
+      success: false,
+      error: "This leave request was already approved or reviewed concurrently by another manager.",
+      status: 409,
+    };
   }
 
   const brandSummary = affectedBrands
