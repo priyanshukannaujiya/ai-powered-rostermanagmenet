@@ -375,7 +375,14 @@ export async function approveLeaveAndReplan({
       txStmts.push(tx`
         UPDATE leaves
         SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = transaction_timestamp(), updated_at = now()
-        WHERE id = ${leaveId} AND status = 'pending'
+        WHERE id = ${leaveId}
+          AND status = 'pending'
+          AND (
+            SELECT COUNT(*) = ${expectedRosterVersions.length}
+            FROM roster_months
+            WHERE id = ANY(${affectedMonthIds})
+              AND updated_at = ${rosterVersionToken}::timestamptz
+          )
         RETURNING id;
       `);
 
