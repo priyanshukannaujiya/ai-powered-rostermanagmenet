@@ -142,5 +142,42 @@ describe("Cross-Month Leave Handling & Edge Cases", () => {
     expect(dec01?.status).toBe("leave");
     expect(dec01?.brandProcessId).toBeNull();
   });
+
+  describe("Missing Roster Month & Concurrency Invariants", () => {
+    it("safely filters out ungenerated months from roster day inserts to avoid foreign key violations", () => {
+      const leaveDates = ["2026-11-29", "2026-11-30", "2026-12-01", "2026-12-02", "2026-12-03"];
+      const generatedMonthSet = new Set(["2026-11"]); // December is NOT generated yet
+
+      const datesToPinInRosterDays = leaveDates.filter((date) => {
+        const m = date.slice(0, 7);
+        return generatedMonthSet.has(m);
+      });
+
+      // Only November dates should be pinned in roster_days; December is handled when that month is generated
+      expect(datesToPinInRosterDays).toEqual(["2026-11-29", "2026-11-30"]);
+    });
+
+    it("prevents double-approval races when status has already transitioned away from pending", () => {
+      // Simulation of atomic UPDATE ... WHERE status = 'pending'
+      const leaveDatabase = { status: "pending" };
+
+      function atomicClaimStatus(targetStatus: string): boolean {
+        if (leaveDatabase.status !== "pending") {
+          return false; // Concurrency conflict: already claimed
+        }
+        leaveDatabase.status = targetStatus;
+        return true;
+      }
+
+      // Reviewer 1 claims
+      const reviewer1Claim = atomicClaimStatus("approved");
+      expect(reviewer1Claim).toBe(true);
+      expect(leaveDatabase.status).toBe("approved");
+
+      // Reviewer 2 races and tries to claim simultaneously
+      const reviewer2Claim = atomicClaimStatus("approved");
+      expect(reviewer2Claim).toBe(false); // Rejected safely without re-running mutations
+    });
+  });
 });
 

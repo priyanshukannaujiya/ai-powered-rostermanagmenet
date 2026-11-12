@@ -46,14 +46,23 @@ export async function POST(
     const notifMessage = `Your leave request for ${startDate} to ${endDate} was not approved.`;
     const notifMeta = JSON.stringify({ leaveId, status: "rejected" });
 
-    // Atomic execution of status update, audit log and notification within a single transaction
-    const txResults = await sql.transaction((tx) => [
-      tx`
-        UPDATE leaves
-        SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = now(), updated_at = now()
-        WHERE id = ${leaveId} AND status = 'pending'
-        RETURNING id;
-      `,
+    // Upfront atomic claim: only the reviewer who claims pending status can proceed
+    const claim = await sql`
+      UPDATE leaves
+      SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = now(), updated_at = now()
+      WHERE id = ${leaveId} AND status = 'pending'
+      RETURNING id;
+    `;
+
+    if (!claim || claim.length === 0) {
+      return NextResponse.json(
+        { error: "This leave request was already reviewed or is no longer pending." },
+        { status: 409 }
+      );
+    }
+
+    // Atomic execution of audit log and notification within a single transaction
+    await sql.transaction((tx) => [
       tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
         VALUES (${auditId}, ${user!.id}, 'LEAVE_REJECTED', 'leaves', ${leaveId}, ${JSON.stringify({ status: "rejected" })}, now(), now());
@@ -64,14 +73,6 @@ export async function POST(
         ON CONFLICT (id) DO NOTHING;
       `,
     ]);
-
-    const updatedRows = txResults[0] || [];
-    if (updatedRows.length === 0) {
-      return NextResponse.json(
-        { error: "This leave request was already reviewed or is no longer pending." },
-        { status: 409 }
-      );
-    }
 
     return NextResponse.json({ success: true, message: "Leave rejected successfully" });
   } catch (error: any) {
