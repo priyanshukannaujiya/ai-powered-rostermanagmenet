@@ -79,6 +79,7 @@ export async function GET(
           LEFT JOIN processes p ON bp.process_id = p.id
           LEFT JOIN employees e ON c.employee_id = e.id
           WHERE c.roster_month_id = ${rosterMonth.id}
+            AND c.resolved = false
             AND (
               ${user!.role} = 'manager'
               OR EXISTS (

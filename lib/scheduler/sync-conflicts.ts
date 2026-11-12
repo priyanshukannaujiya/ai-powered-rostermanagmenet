@@ -25,6 +25,7 @@ export async function syncRosterConflicts(sql: any, month: string): Promise<Conf
     SELECT * FROM roster_days WHERE roster_month_id = ${monthId};
   `;
   if (!daysRaw || daysRaw.length === 0) {
+    await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
     return [];
   }
 
@@ -129,19 +130,49 @@ export async function syncRosterConflicts(sql: any, month: string): Promise<Conf
 
   const { blockingConflicts: preSolveConflicts } = checkCapacity(input, allDemands);
   const postSolveConflicts = validateRosterAndGenerateConflicts(input, allDemands, days);
-  const allConflicts = [...preSolveConflicts, ...postSolveConflicts];
 
-  // Refresh conflicts table
-  await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
-
-  for (const c of allConflicts) {
-    const cId = `cf-${monthId}-${c.id}`;
-    await sql`
-      INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
-      VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now())
-      ON CONFLICT (id) DO UPDATE SET message = EXCLUDED.message, suggested_fix = EXCLUDED.suggested_fix, updated_at = now();
-    `;
+  // Capacity checks use static assignment eligibility. A manager can manually
+  // place a qualified backup directly on the roster without changing that
+  // employee's long-term assignment. Do not keep a capacity warning when the
+  // actual roster already satisfies the required headcount for that date.
+  const coveredDemandKeys = new Set<string>();
+  for (const demand of allDemands) {
+    const staffed = new Set(
+      days
+        .filter((day) =>
+          day.status === "working" &&
+          day.brandProcessId === demand.brandProcessId &&
+          day.date === demand.date
+        )
+        .map((day) => day.employeeId)
+    );
+    if (staffed.size >= demand.requiredHeadcount) {
+      coveredDemandKeys.add(`${demand.brandProcessId}_${demand.date}`);
+    }
   }
+
+  const remainingCapacityConflicts = preSolveConflicts.filter((conflict) =>
+    !conflict.brandProcessId ||
+    !conflict.date ||
+    !coveredDemandKeys.has(`${conflict.brandProcessId}_${conflict.date}`)
+  );
+  const allConflicts = [...remainingCapacityConflicts, ...postSolveConflicts];
+
+  // Replace the conflict snapshot atomically so dashboards never read a
+  // partially refreshed set if an insert fails.
+  await sql.transaction((tx) => {
+    const statements = [
+      tx`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`,
+      ...allConflicts.map((c) => {
+        const cId = `cf-${monthId}-${c.id}`;
+        return tx`
+          INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
+          VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now());
+        `;
+      }),
+    ];
+    return statements;
+  });
 
   return allConflicts;
 }
