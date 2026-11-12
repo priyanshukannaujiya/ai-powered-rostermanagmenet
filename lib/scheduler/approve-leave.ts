@@ -114,14 +114,7 @@ export async function approveLeaveAndReplan({
       const updateResult = await sql`
         UPDATE leaves
         SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = now(), updated_at = now()
-        WHERE id = ${leaveId}
-          AND status = 'pending'
-          AND (
-            SELECT COUNT(*) = ${expectedRosterVersions.length}
-            FROM roster_months
-            WHERE id = ANY(${affectedMonthIds})
-              AND updated_at = ${rosterVersionToken}::timestamptz
-          )
+        WHERE id = ${leaveId} AND status = 'pending'
         RETURNING id;
       `;
       if (!updateResult || updateResult.length === 0) {
