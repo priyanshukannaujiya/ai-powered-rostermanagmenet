@@ -7,7 +7,10 @@ export const swrDefaults = {
 
 export const dashboardSWR = {
   ...swrDefaults,
-  refreshInterval: 60000,
+  revalidateIfStale: true,
+  revalidateOnMount: true,
+  revalidateOnFocus: true,
+  refreshInterval: 30000,
 };
 
 export const liveSWR = {
