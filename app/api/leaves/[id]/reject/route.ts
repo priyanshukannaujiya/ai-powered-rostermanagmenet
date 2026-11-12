@@ -44,14 +44,13 @@ export async function POST(
     const endDate = formatDateOnly(leave[0].end_date);
     const notifMessage = `Your leave request for ${startDate} to ${endDate} was not approved.`;
     const notifMeta = JSON.stringify({ leaveId, status: "rejected" });
-    const reviewedAt = new Date().toISOString();
 
     // Status, audit, and notification share one transaction. Dependent writes
     // only occur if this request successfully claims the pending leave.
     const txResults = await sql.transaction((tx) => [
       tx`
         UPDATE leaves
-        SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = ${reviewedAt}, updated_at = now()
+        SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = transaction_timestamp(), updated_at = now()
         WHERE id = ${leaveId}
           AND status = 'pending'
           AND (
@@ -66,7 +65,7 @@ export async function POST(
       tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
         SELECT ${auditId}, ${user!.id}, 'LEAVE_REJECTED', 'leaves', ${leaveId}, ${notifMeta}::jsonb, now(), now()
-        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'rejected' AND reviewed_by = ${user!.id} AND reviewed_at = ${reviewedAt}::timestamptz);
+        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'rejected' AND reviewed_by = ${user!.id} AND reviewed_at = transaction_timestamp());
       `,
       tx`
         INSERT INTO notifications (id, employee_id, title, message, type, date, metadata, read, created_at, updated_at)
