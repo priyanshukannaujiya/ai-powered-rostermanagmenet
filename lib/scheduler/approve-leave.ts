@@ -427,7 +427,7 @@ export async function approveLeaveAndReplan({
       // 6e. Audit log
       txStmts.push(tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
-        VALUES (
+        SELECT
           ${`audit-${Date.now()}`},
           ${reviewerUserId},
           'LEAVE_APPROVED_REPLAN',
@@ -440,10 +440,9 @@ export async function approveLeaveAndReplan({
             employeeName: leave.employee_name,
             startDate,
             endDate,
-          })},
+          })}::jsonb,
           now(),
           now()
-        )
         WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
       `);
 
