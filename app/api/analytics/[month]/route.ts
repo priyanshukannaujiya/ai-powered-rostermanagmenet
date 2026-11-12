@@ -170,7 +170,7 @@ export async function GET(
         severity,
         COUNT(*) as count
       FROM conflicts
-      WHERE roster_month_id = ${monthId} AND date IS NOT NULL
+      WHERE roster_month_id = ${monthId} AND resolved = false AND date IS NOT NULL
       GROUP BY date, severity
       ORDER BY date ASC;
     `;
@@ -219,7 +219,7 @@ export async function GET(
         COUNT(*) FILTER (WHERE severity = 'blocking') as blocking,
         COUNT(*) FILTER (WHERE severity = 'warning') as warnings
       FROM conflicts
-      WHERE roster_month_id = ${monthId};
+      WHERE roster_month_id = ${monthId} AND resolved = false;
     `;
 
     return NextResponse.json({
