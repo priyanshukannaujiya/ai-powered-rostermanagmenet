@@ -237,7 +237,7 @@ export async function POST(
     }
     // Preserve PostgreSQL timestamp precision for an exact compare-and-swap.
     const expectedRosterVersion = versionRows[0].updated_at;
-    const generationToken = new Date().toISOString().replace(/\\.(\\d{3})Z$/, (_, ms) => `.${ms}${randomUUID().replace(/-/g, \"\").slice(0, 3)}Z`);
+    const generationToken = new Date().toISOString().replace(/\.(\d{3})Z$/, (_, ms) => \`.\${ms}\${randomUUID().replace(/-/g, "").slice(0, 3)}Z\`);
 
     // Fetch master data needed for scheduler
     const employeesRaw = await sql`SELECT id, name, email, pod_id, active FROM employees WHERE active = true;`;
