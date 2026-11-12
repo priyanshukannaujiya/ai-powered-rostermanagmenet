@@ -70,7 +70,12 @@ export function parseWorkbookBuffer(buffer: Buffer): ParseResult {
 
   let wb: XLSX.WorkBook;
   try {
-    wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
+    wb = XLSX.read(buffer, {
+      type: "buffer",
+      cellDates: true,
+      cellFormula: false, // Disables formula evaluation (CVE mitigation)
+      cellHTML: false,    // Disables HTML rendering (XSS mitigation)
+    });
   } catch (err: any) {
     return { ok: false, errors: [`Failed to read Excel workbook: ${err.message}`] };
   }

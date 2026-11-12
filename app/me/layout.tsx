@@ -3,10 +3,22 @@
 import React from "react";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
+import { useSWRConfig } from "swr";
 import { Calendar, User, LogOut } from "lucide-react";
 
 export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
+  const { mutate } = useSWRConfig();
   const currentMonth = new Date().toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const handleSignOut = async () => {
+    // Isolate & wipe client-side SWR cache completely upon logout
+    try {
+      await mutate(() => true, undefined, { revalidate: false });
+    } catch {
+      // ignore
+    }
+    await signOut({ callbackUrl: "/login" });
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans antialiased text-slate-900">
@@ -39,7 +51,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
 
             <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
               <button
-                onClick={() => signOut({ callbackUrl: "/login" })}
+                onClick={handleSignOut}
                 className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
                 title="Sign Out"
                 aria-label="Sign out"

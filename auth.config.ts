@@ -1,20 +1,27 @@
 import type { NextAuthConfig } from "next-auth";
 
 export const authConfig: NextAuthConfig = {
+  secret: process.env.AUTH_SECRET,
+  trustHost: true,
   pages: {
     signIn: "/login",
   },
+  session: {
+    strategy: "jwt",
+    maxAge: 30 * 24 * 60 * 60, // 30 days
+  },
   callbacks: {
     authorized({ auth, request: { nextUrl } }) {
-      const isLoggedIn = !!auth?.user;
-      const role = (auth?.user as any)?.role;
+      const user = auth?.user as any;
+      const isLoggedIn = !!user;
+      const role = user?.role || (auth as any)?.role || (auth as any)?.token?.role;
 
       const isManagerRoute = nextUrl.pathname.startsWith("/manager");
       const isEmployeeRoute = nextUrl.pathname.startsWith("/me");
 
       if (isManagerRoute) {
         if (!isLoggedIn) return false;
-        if (role !== "manager" && role !== "pod_lead") return false;
+        if (role && role !== "manager" && role !== "pod_lead") return false;
       }
 
       if (isEmployeeRoute) {
@@ -32,8 +39,11 @@ export const authConfig: NextAuthConfig = {
       return token;
     },
     session({ session, token }) {
-      if (token && session.user) {
-        session.user.id = token.id as string;
+      if (token) {
+        if (!session.user) {
+          (session as any).user = {} as any;
+        }
+        session.user.id = (token.id as string) || (token.sub as string);
         (session.user as any).role = token.role as string;
         (session.user as any).employeeId = token.employeeId as string | null;
       }

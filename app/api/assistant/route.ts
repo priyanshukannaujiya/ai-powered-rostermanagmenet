@@ -8,6 +8,7 @@ import {
   isExplicitLeaveApprovalRequest,
   isExplicitNotificationRequest,
 } from "@/lib/assistant/intent";
+import { checkToolAccess } from "@/lib/assistant/rbac";
 import { randomUUID } from "crypto";
 import { isValidRosterMonth } from "@/lib/import/month";
 import { createEmployeeNotification } from "@/lib/notifications/create";
@@ -107,136 +108,6 @@ function buildToolResultFallback(toolResult: any): string | null {
   }
 
   return null;
-}
-
-async function callGroqAssistant({
-  systemPrompt,
-  history,
-  message,
-  toolsDefinition,
-}: {
-  systemPrompt: string;
-  history: Array<{ role: "user" | "assistant"; content: string }>;
-  message: string;
-  toolsDefinition: any[];
-}) {
-  const messages: any[] = [
-    { role: "system", content: systemPrompt },
-    ...history,
-    { role: "user", content: message },
-  ];
-
-  const apiKey = sanitizeApiKey(process.env.GROQ_API_KEY || "");
-  if (!apiKey) {
-    throw new Error("GROQ_API_KEY is not configured.");
-  }
-
-  let modelChoice = "openai/gpt-oss-120b";
-  let firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: modelChoice,
-      messages,
-      tools: toolsDefinition,
-      tool_choice: "auto",
-      temperature: 0.2,
-    }),
-  });
-
-  if (!firstRes.ok) {
-    modelChoice = "qwen/qwen3.8-27b";
-    firstRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: modelChoice,
-        messages,
-        tools: toolsDefinition,
-        tool_choice: "auto",
-        temperature: 0.2,
-      }),
-    });
-  }
-
-  if (!firstRes.ok) {
-    throw new Error(`Groq request failed with ${firstRes.status}: ${await firstRes.text()}`);
-  }
-
-  const firstData = await firstRes.json();
-  const assistantMsg = firstData.choices?.[0]?.message;
-  let replyText = "";
-  let toolResult: any = null;
-  let toolUsed = "";
-  let systemReflected = false;
-
-  if (assistantMsg?.tool_calls && assistantMsg.tool_calls.length > 0) {
-    messages.push(assistantMsg);
-
-    for (const call of assistantMsg.tool_calls) {
-      const funcName = call.function.name;
-      let parsedArgs: any = {};
-      try {
-        parsedArgs = JSON.parse(call.function.arguments || "{}");
-      } catch {
-        toolResult = { error: "The assistant produced invalid tool arguments; no action was taken." };
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: JSON.stringify(toolResult),
-        });
-        continue;
-      }
-
-      toolUsed = funcName;
-      const res = await executeTool(
-        funcName,
-        { ...parsedArgs, month: parsedArgs.month ?? new Date().toISOString().slice(0, 7) },
-        "manager",
-        null,
-        undefined,
-        message,
-        history.slice(-1)[0]?.content || ""
-      );
-      toolResult = res;
-      if (res?.systemReflected) systemReflected = true;
-      messages.push({
-        role: "tool",
-        tool_call_id: call.id,
-        content: JSON.stringify(res),
-      });
-    }
-
-    const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: modelChoice,
-        messages,
-        temperature: 0.2,
-      }),
-    });
-
-    if (!secondRes.ok) {
-      throw new Error(`Groq follow-up request failed with ${secondRes.status}: ${await secondRes.text()}`);
-    }
-
-    const secondData = await secondRes.json();
-    replyText = secondData.choices?.[0]?.message?.content || "";
-  } else if (assistantMsg?.content) {
-    replyText = assistantMsg.content;
-  }
-
-  return { replyText, toolResult, toolUsed, systemReflected };
 }
 
 // Live OpenAI-compatible Function Tools Definition
@@ -498,30 +369,9 @@ async function executeTool(
   currentMessage = "",
   previousAssistantMessage = ""
 ) {
-  const employeeScopedTools = new Set([
-    "get_employee_schedule",
-    "get_leave_requests",
-    "get_roster_configuration",
-  ]);
-  const managerOnlyTools = new Set([
-    "get_system_health",
-    "get_system_analysis",
-    "get_pod_workload",
-    "get_pod_analysis",
-    "get_spof_risks",
-    "find_backups",
-    "get_import_summary",
-    "get_import_errors",
-    "get_latest_import",
-    "list_brands",
-    "list_processes",
-    "get_pod_members",
-  ]);
-  if (userRole === "employee" && !employeeScopedTools.has(toolName)) {
-    return { error: "This operation is not available for employee accounts.", denied: true };
-  }
-  if (userRole === "pod_lead" && managerOnlyTools.has(toolName)) {
-    return { error: "This operation is restricted to managers.", denied: true };
+  const access = checkToolAccess(toolName, userRole);
+  if (!access.allowed) {
+    return { error: access.error, denied: true };
   }
 
   const sql = neon(process.env.DATABASE_URL!);
@@ -2237,9 +2087,17 @@ User session: ${user!.email} (role: ${user!.role})
 Roster month: ${month}
 Latest committed import: ${activeImportId ? `${activeImportId} (${latestImportRec[0].filename})` : "none"}
 
-Use the provided tools for every question about live roster, employee, pod, brand, process, assignment, availability, conflict, leave, or import data. Answer from live database records, not memory. Never invent people, brands, dates, coverage numbers, leave statuses, or actions. If the requested detail is missing, a name is ambiguous, or the database cannot verify availability, ask a focused clarifying question and do not guess. Explain the evidence and any remaining conflicts; never claim coverage is resolved while blocking conflicts remain. Respect the caller's role and data scope, and never expose passwords or secrets.
+CONVERSATIONAL BEHAVIOR:
+- Respond naturally and conversationally to greetings (e.g. "Hello", "Hi", "Good morning"), capability questions ("What can you do?"), and explanations of system design (e.g. how deterministic roster generation works, how leave replanning works, or what single-resource brands are) without calling database tools.
+- Maintain a helpful, professional, and clear tone.
 
-Treat write actions carefully. Approve a leave only after a direct instruction to approve a specific employee's request; hypothetical questions are read-only and should use the impact/conflict tools. Make an assignment only when employee, date(s), and configured brand/process are clear. Assignment alone must not approve leave, resolve conflicts automatically, or send a notification. After a successful assignment, ask whether the manager wants the employee and pod lead notified. Call notify_employee only after a direct manager request or a clear confirmation to your immediately preceding notification offer.`;
+OPERATIONAL QUERIES:
+- For specific inquiries about live roster data, employee shifts, pod workload, brand coverage, conflicts, leaves, or imports, always execute the appropriate database tools to answer strictly from live records, not memory.
+- Never invent people, brands, numbers, or statuses.
+
+SENSITIVE ACTIONS:
+- Approve leave or assign employees only when explicitly instructed by a manager. After an assignment, ask if the manager would like the employee and pod lead notified.
+- Call notify_employee only upon direct manager confirmation.`;
 
   try {
     let replyText = "";
@@ -2289,9 +2147,16 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
           });
         }
 
-        if (firstRes.ok) {
-          const firstData = await firstRes.json();
-          const assistantMsg = firstData.choices?.[0]?.message;
+        let currentRes = firstRes;
+        let turns = 0;
+        const MAX_TURNS = 3;
+
+        while (turns < MAX_TURNS) {
+          turns++;
+          if (!currentRes.ok) break;
+
+          const data = await currentRes.json();
+          const assistantMsg = data.choices?.[0]?.message;
 
           if (assistantMsg?.tool_calls && assistantMsg.tool_calls.length > 0) {
             messages.push(assistantMsg);
@@ -2331,7 +2196,8 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
               });
             }
 
-            const secondRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            // Follow-up query to provide tool results back to LLM
+            currentRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: {
                 Authorization: `Bearer ${groqKey}`,
@@ -2340,16 +2206,16 @@ Treat write actions carefully. Approve a leave only after a direct instruction t
               body: JSON.stringify({
                 model: modelChoice,
                 messages,
+                tools: toolsDefinition,
+                tool_choice: "auto",
                 temperature: 0.2,
               }),
             });
-
-            if (secondRes.ok) {
-              const secondData = await secondRes.json();
-              replyText = secondData.choices?.[0]?.message?.content || "";
+          } else {
+            if (assistantMsg?.content) {
+              replyText = assistantMsg.content;
             }
-          } else if (assistantMsg?.content) {
-            replyText = assistantMsg.content;
+            break;
           }
         }
       } catch (fetchErr) {

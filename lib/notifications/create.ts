@@ -15,6 +15,19 @@ export async function createEmployeeNotification(
   sql: NeonQueryFunction<false, false>,
   input: NotificationInput
 ) {
+  // Deduplication guard: ignore duplicate identical notifications emitted within 60 seconds
+  const existing = await sql`
+    SELECT id FROM notifications
+    WHERE employee_id = ${input.employeeId}
+      AND title = ${input.title}
+      AND type = ${input.type}
+      AND created_at >= now() - interval '60 seconds'
+    LIMIT 1;
+  `;
+  if (existing.length > 0) {
+    return { notificationId: existing[0].id as string, podLeadNotificationId: null };
+  }
+
   const notificationId = `notif-${randomUUID()}`;
   const employeeRows = input.notifyPodLead
     ? await sql`

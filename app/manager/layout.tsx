@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { useSWRConfig } from "swr";
 import {
   Calendar,
   LayoutDashboard,
@@ -24,10 +25,20 @@ import { MonthPicker } from "@/components/ui/MonthPicker";
 import { cn } from "@/lib/utils";
 
 export default function ManagerLayout({ children }: { children: React.ReactNode }) {
+  const { mutate } = useSWRConfig();
   const pathname = usePathname();
   const router = useRouter();
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const handleSignOut = async () => {
+    try {
+      await mutate(() => true, undefined, { revalidate: false });
+    } catch {
+      // ignore
+    }
+    await signOut({ callbackUrl: "/login" });
+  };
 
   const defaultMonth = new Date().toISOString().slice(0, 7);
   const rosterMonthMatch = pathname.match(/\/manager\/roster\/(\d{4}-\d{2})/);
@@ -111,7 +122,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
               </span>
             </span>
             <button
-              onClick={() => signOut({ callbackUrl: "/login" })}
+              onClick={handleSignOut}
               className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
               title="Sign out"
               aria-label="Sign out"

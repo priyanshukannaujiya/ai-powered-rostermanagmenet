@@ -26,6 +26,13 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { ok: false, errors: [{ sheet: "File", row: 0, field: "file", message: "File exceeds maximum permitted size of 10MB." }] },
+        { status: 413 }
+      );
+    }
     if (!isValidRosterMonth(targetMonth)) {
       return NextResponse.json(
         { ok: false, errors: [{ sheet: "Import", row: 0, field: "targetMonth", message: "Select a valid roster month before previewing." }] },
@@ -120,7 +127,7 @@ export async function POST(req: NextRequest) {
         JOIN employees e ON a.employee_id = e.id
         JOIN brand_processes bp ON a.brand_process_id = bp.id
         JOIN brands b ON bp.brand_id = b.id
-        JOIN processes p ON bp.process_id = p.id;
+        JOIN processes p ON bp.process_id = p.id
         WHERE a.active = true
           AND a.start_date <= ${monthEnd}
           AND (a.end_date IS NULL OR a.end_date >= ${monthStart})

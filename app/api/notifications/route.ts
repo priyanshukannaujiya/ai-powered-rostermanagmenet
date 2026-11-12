@@ -27,19 +27,25 @@ export async function GET(req: NextRequest) {
   try {
     let rows: any[] = [];
 
-    if (role === "employee") {
-      // Hard isolation: any client-supplied employeeId is deliberately ignored.
-      if (!sessionEmployeeId) {
-        return NextResponse.json({ success: true, notifications: [], scope: "employee" });
+    if (role === "manager") {
+      if (requestedEmployeeId) {
+        rows = await sql`
+          SELECT n.*, e.name as employee_name
+          FROM notifications n
+          JOIN employees e ON n.employee_id = e.id
+          WHERE n.employee_id = ${requestedEmployeeId}
+          ORDER BY n.created_at DESC
+          LIMIT 50;
+        `;
+      } else {
+        rows = await sql`
+          SELECT n.*, e.name as employee_name
+          FROM notifications n
+          JOIN employees e ON n.employee_id = e.id
+          ORDER BY n.created_at DESC
+          LIMIT 50;
+        `;
       }
-      rows = await sql`
-        SELECT n.*, e.name as employee_name
-        FROM notifications n
-        JOIN employees e ON n.employee_id = e.id
-        WHERE n.employee_id = ${sessionEmployeeId}
-        ORDER BY n.created_at DESC
-        LIMIT 50;
-      `;
     } else if (role === "pod_lead") {
       if (!sessionEmployeeId) {
         return NextResponse.json({ success: true, notifications: [], scope: "pod_lead" });
@@ -53,20 +59,17 @@ export async function GET(req: NextRequest) {
         ORDER BY n.created_at DESC
         LIMIT 50;
       `;
-    } else if (requestedEmployeeId) {
-      rows = await sql`
-        SELECT n.*, e.name as employee_name
-        FROM notifications n
-        JOIN employees e ON n.employee_id = e.id
-        WHERE n.employee_id = ${requestedEmployeeId}
-        ORDER BY n.created_at DESC
-        LIMIT 50;
-      `;
     } else {
+      // Hard isolation for employee (and any unrecognized role):
+      // Any client-supplied employeeId is deliberately ignored; queries only own sessionEmployeeId.
+      if (!sessionEmployeeId) {
+        return NextResponse.json({ success: true, notifications: [], scope: "employee" });
+      }
       rows = await sql`
         SELECT n.*, e.name as employee_name
         FROM notifications n
         JOIN employees e ON n.employee_id = e.id
+        WHERE n.employee_id = ${sessionEmployeeId}
         ORDER BY n.created_at DESC
         LIMIT 50;
       `;

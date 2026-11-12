@@ -80,20 +80,6 @@ export default function EmployeePortalPage() {
   const [year, monthNumber] = currentMonth.split("-").map(Number);
   const [viewMode, setViewMode] = useState<"calendar" | "agenda">("calendar");
 
-  // SWR for employee's leaves
-  const { data: leavesData, mutate: mutateLeaves, isLoading: leavesLoading } = useSWR(
-    "/api/leaves",
-    fetcher,
-    dashboardSWR
-  );
-
-  // SWR for employee notifications (shift appointments & alerts)
-  const { data: notifData, mutate: mutateNotifs } = useSWR(
-    "/api/notifications",
-    fetcher,
-    liveSWR
-  );
-
   // Deterministic schedule: a direct DB read via GET /api/me/schedule.
   // No LLM round-trip, so approvals and reassignments appear immediately.
   const {
@@ -103,6 +89,22 @@ export default function EmployeePortalPage() {
     error: scheduleError,
   } = useSWR<ApiScheduleResponse>(
     `/api/me/schedule?month=${currentMonth}`,
+    fetcher,
+    liveSWR
+  );
+
+  const activeEmployeeId = scheduleData?.employee?.id || "session";
+
+  // SWR for employee's leaves, isolated to the authenticated employee identity
+  const { data: leavesData, mutate: mutateLeaves, isLoading: leavesLoading } = useSWR(
+    `/api/leaves?emp=${activeEmployeeId}`,
+    fetcher,
+    dashboardSWR
+  );
+
+  // SWR for employee notifications (shift appointments & alerts), isolated by active employee
+  const { data: notifData, mutate: mutateNotifs } = useSWR(
+    `/api/notifications?emp=${activeEmployeeId}`,
     fetcher,
     liveSWR
   );

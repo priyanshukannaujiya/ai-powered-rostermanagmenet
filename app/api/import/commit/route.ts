@@ -61,6 +61,13 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { ok: false, error: "File exceeds maximum permitted size of 10MB." },
+        { status: 413 }
+      );
+    }
     if (!isValidRosterMonth(selectedMonth)) {
       return NextResponse.json(
         { ok: false, error: "Select a valid roster month before committing the import." },

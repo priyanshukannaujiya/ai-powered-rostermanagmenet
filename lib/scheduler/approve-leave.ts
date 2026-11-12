@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { replanRoster } from "./replan";
+import { syncRosterConflicts } from "./sync-conflicts";
 import {
   EmployeeInfo,
   BrandProcessRule,
@@ -326,18 +327,20 @@ export async function approveLeaveAndReplan({
     WHERE id = ${leaveId};
   `;
 
-  // Drop every re-plannable future day, then rebuild from the solver output.
+  // Drop every re-plannable future day in the starting month, then rebuild from the solver output.
   await sql`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND date >= ${startDate} AND pinned = false;`;
   await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
 
-  // Explicitly remove any prior shifts (pinned or unpinned) for the absent employee during the leave period
-  await sql`
-    DELETE FROM roster_days
-    WHERE roster_month_id = ${monthId}
-      AND employee_id = ${leave.employee_id}
-      AND date >= ${startDate}
-      AND date <= ${endDate};
-  `;
+  // Explicitly remove any prior working shifts (pinned or unpinned) for the absent employee during the leave period across all affected months
+  for (const affMonthId of affectedMonthIds) {
+    await sql`
+      DELETE FROM roster_days
+      WHERE roster_month_id = ${affMonthId}
+        AND employee_id = ${leave.employee_id}
+        AND date >= ${startDate}
+        AND date <= ${endDate};
+    `;
+  }
 
   // Insert updated days for other colleagues from the replan solver in concurrent chunks
   const daysToInsert = replanResult.updatedDays.filter((d) => {
@@ -395,6 +398,17 @@ export async function approveLeaveAndReplan({
     );
   }
 
+  // Cross-month synchronization: if leave dates span into subsequent months, sync conflicts there too
+  for (const otherMonth of Array.from(leaveDatesByMonth.keys())) {
+    if (otherMonth !== month) {
+      try {
+        await syncRosterConflicts(sql, otherMonth);
+      } catch (syncErr) {
+        console.warn(`Failed to sync conflicts for secondary month ${otherMonth}:`, syncErr);
+      }
+    }
+  }
+
   // Audit log
   await sql`
     INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
@@ -405,12 +419,12 @@ export async function approveLeaveAndReplan({
       'leaves',
       ${leaveId},
       ${JSON.stringify({
-        diffSummary: replanResult.diff.changedDays.length,
-        newConflicts: replanResult.diff.newConflicts.length,
-        employeeName: leave.employee_name,
-        startDate,
-        endDate,
-      })},
+    diffSummary: replanResult.diff.changedDays.length,
+    newConflicts: replanResult.diff.newConflicts.length,
+    employeeName: leave.employee_name,
+    startDate,
+    endDate,
+  })},
       now(),
       now()
     );

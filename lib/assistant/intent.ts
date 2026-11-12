@@ -31,3 +31,11 @@ export function isExplicitLeaveApprovalRequest(message: string): boolean {
   }
   return /\b(approve|accept)\b.*\b(leave|request)\b/.test(normalized);
 }
+
+export function isConversationalGreeting(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return /^(hi|hello|hey|good morning|good afternoon|good evening|greetings|howdy|what's up|help|who are you|what can you do)[\s!.?]*$/i.test(
+    normalized
+  );
+}
+
