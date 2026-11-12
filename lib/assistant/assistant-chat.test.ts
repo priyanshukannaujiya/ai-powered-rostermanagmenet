@@ -87,8 +87,12 @@ describe("AI Operations Assistant - Dual Mode & RBAC Matrix", () => {
 
       // Allowed for pod leads
       expect(checkToolAccess("get_pending_leaves", "pod_lead").allowed).toBe(true);
+      expect(checkToolAccess("get_leave_queue_analysis", "pod_lead").allowed).toBe(true);
+      expect(checkToolAccess("get_leave_requests", "pod_lead").allowed).toBe(true);
       expect(checkToolAccess("get_conflicts", "pod_lead").allowed).toBe(true);
       expect(checkToolAccess("get_employee_schedule", "pod_lead").allowed).toBe(true);
+      expect(checkToolAccess("assign_replacement_employee", "pod_lead").allowed).toBe(false);
+      expect(checkToolAccess("unknown_sensitive_tool", "pod_lead").allowed).toBe(false);
     });
 
     it("allows managers to access all tools", () => {
@@ -117,6 +121,8 @@ describe("AI Operations Assistant - Dual Mode & RBAC Matrix", () => {
       for (const tool of allTools) {
         expect(checkToolAccess(tool, "manager").allowed).toBe(true);
       }
+      expect(checkToolAccess("unknown_sensitive_tool", "manager").allowed).toBe(false);
+      expect(checkToolAccess("unknown_sensitive_tool", "employee").allowed).toBe(false);
     });
   });
 });

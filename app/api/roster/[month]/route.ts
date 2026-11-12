@@ -28,6 +28,9 @@ export async function GET(
   if (errorResponse) return errorResponse;
 
   const month = params.month;
+  if (user!.role === "pod_lead" && !user!.employeeId) {
+    return NextResponse.json({ error: "Pod lead account is not linked to an employee." }, { status: 403 });
+  }
   if (!isValidRosterMonth(month)) {
     return NextResponse.json({ error: "Invalid month format. Expected YYYY-MM" }, { status: 400 });
   }
@@ -48,6 +51,15 @@ export async function GET(
           LEFT JOIN brands b ON bp.brand_id = b.id
           LEFT JOIN processes p ON bp.process_id = p.id
           WHERE rd.roster_month_id = ${rosterMonth.id}
+            AND (
+              ${user!.role} = 'manager'
+              OR EXISTS (
+                SELECT 1 FROM employees scoped_employee
+                JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                WHERE scoped_employee.id = rd.employee_id
+                  AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+              )
+            )
           ORDER BY rd.date ASC;
         `
       : [];
@@ -67,6 +79,26 @@ export async function GET(
           LEFT JOIN processes p ON bp.process_id = p.id
           LEFT JOIN employees e ON c.employee_id = e.id
           WHERE c.roster_month_id = ${rosterMonth.id}
+            AND (
+              ${user!.role} = 'manager'
+              OR EXISTS (
+                SELECT 1 FROM employees scoped_employee
+                JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                WHERE scoped_employee.id = c.employee_id
+                  AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+              )
+              OR (
+                c.employee_id IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM assignments scoped_assignment
+                  JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+                  JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                  WHERE scoped_assignment.brand_process_id = c.brand_process_id
+                    AND scoped_assignment.active = true
+                    AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+                )
+              )
+            )
           ORDER BY c.severity DESC, c.date ASC;
         `
       : [];
@@ -82,6 +114,26 @@ export async function GET(
           LEFT JOIN processes p ON bp.process_id = p.id
           LEFT JOIN employees e ON c.employee_id = e.id
           WHERE c.roster_month_id = ${rosterMonth.id}
+            AND (
+              ${user!.role} = 'manager'
+              OR EXISTS (
+                SELECT 1 FROM employees scoped_employee
+                JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                WHERE scoped_employee.id = c.employee_id
+                  AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+              )
+              OR (
+                c.employee_id IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM assignments scoped_assignment
+                  JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+                  JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+                  WHERE scoped_assignment.brand_process_id = c.brand_process_id
+                    AND scoped_assignment.active = true
+                    AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+                )
+              )
+            )
           ORDER BY c.severity DESC, c.date ASC;
         `;
       } catch (syncErr) {
@@ -99,12 +151,44 @@ export async function GET(
       SELECT e.*, p.name as pod_name
       FROM employees e
       LEFT JOIN pods p ON e.pod_id = p.id
+      WHERE ${user!.role} = 'manager'
+        OR p.lead_employee_id = ${user!.employeeId || null}
       ORDER BY e.name ASC;
     `;
 
-    const pods = await sql`SELECT * FROM pods ORDER BY name ASC;`;
-    const brands = await sql`SELECT * FROM brands WHERE active = true ORDER BY name ASC;`;
-    const processes = await sql`SELECT * FROM processes ORDER BY code ASC;`;
+    const pods = await sql`
+      SELECT * FROM pods
+      WHERE ${user!.role} = 'manager'
+        OR lead_employee_id = ${user!.employeeId || null}
+      ORDER BY name ASC;
+    `;
+    const brands = await sql`
+      SELECT DISTINCT b.* FROM brands b
+      WHERE b.active = true
+        AND (
+          ${user!.role} = 'manager'
+          OR EXISTS (
+            SELECT 1 FROM brand_processes bp
+            JOIN assignments scoped_assignment ON scoped_assignment.brand_process_id = bp.id AND scoped_assignment.active = true
+            JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE bp.brand_id = b.id AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+          )
+        )
+      ORDER BY b.name ASC;
+    `;
+    const processes = await sql`
+      SELECT DISTINCT p.* FROM processes p
+      WHERE ${user!.role} = 'manager'
+        OR EXISTS (
+          SELECT 1 FROM brand_processes bp
+          JOIN assignments scoped_assignment ON scoped_assignment.brand_process_id = bp.id AND scoped_assignment.active = true
+          JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+          JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+          WHERE bp.process_id = p.id AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+        )
+      ORDER BY p.code ASC;
+    `;
     const brandProcesses = await sql`
       SELECT bp.*, b.name as brand_name, p.code as process_code,
         COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
@@ -116,7 +200,18 @@ export async function GET(
       JOIN processes p ON bp.process_id = p.id
       LEFT JOIN roster_month_rules mr
         ON mr.brand_process_id = bp.id AND mr.month = ${month}
-      WHERE bp.active = true AND b.active = true;
+      WHERE bp.active = true AND b.active = true
+        AND (
+          ${user!.role} = 'manager'
+          OR EXISTS (
+            SELECT 1 FROM assignments scoped_assignment
+            JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_assignment.brand_process_id = bp.id
+              AND scoped_assignment.active = true
+              AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+          )
+        );
     `;
     const [yStr, mStr] = month.split("-");
     const lastDayOfMonth = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0).getDate();

@@ -717,21 +717,24 @@ async function executeTool(
     // 4. Pending Leave Approvals Queue
     case "get_pending_leaves":
     case "get_leave_queue_analysis": {
-      let pendingLeaves = await sql`
+      const pendingLeaves = await sql`
         SELECT l.*, e.name as employee_name, e.email as employee_email, e.pod_id, p.name as pod_name
         FROM leaves l
         JOIN employees e ON l.employee_id = e.id
         LEFT JOIN pods p ON e.pod_id = p.id
         WHERE l.status = 'pending'
+          AND (
+            ${userRole} = 'manager'
+            OR l.employee_id = ${callerEmployeeId || null}
+            OR EXISTS (
+              SELECT 1
+              FROM pods scoped_pod
+              WHERE scoped_pod.id = e.pod_id
+                AND scoped_pod.lead_employee_id = ${callerEmployeeId || null}
+            )
+          )
         ORDER BY l.start_date ASC;
       `;
-      if (userRole === "employee") {
-        pendingLeaves = pendingLeaves.filter((leave: any) => leave.employee_id === callerEmployeeId);
-      } else if (userRole === "pod_lead") {
-        const podRows = await sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`;
-        const podIds = new Set(podRows.map((pod: any) => pod.id));
-        pendingLeaves = pendingLeaves.filter((leave: any) => podIds.has(leave.pod_id) || leave.employee_id === callerEmployeeId);
-      }
 
       const empIds = pendingLeaves.map((l: any) => l.employee_id);
       const assignedBrandsByEmp = new Map<string, string[]>();
@@ -786,15 +789,18 @@ async function executeTool(
         FROM leaves l
         JOIN employees e ON l.employee_id = e.id
         LEFT JOIN pods p ON e.pod_id = p.id
+        WHERE (
+          ${userRole} = 'manager'
+          OR l.employee_id = ${callerEmployeeId || null}
+          OR EXISTS (
+            SELECT 1
+            FROM pods scoped_pod
+            WHERE scoped_pod.id = e.pod_id
+              AND scoped_pod.lead_employee_id = ${callerEmployeeId || null}
+          )
+        )
         ORDER BY l.start_date DESC;
       `;
-      if (userRole === "employee") {
-        leaveRows = leaveRows.filter((leave: any) => leave.employee_id === callerEmployeeId);
-      } else if (userRole === "pod_lead") {
-        const podRows = await sql`SELECT id FROM pods WHERE lead_employee_id = ${callerEmployeeId};`;
-        const podIds = new Set(podRows.map((pod: any) => pod.id));
-        leaveRows = leaveRows.filter((leave: any) => podIds.has(leave.pod_id) || leave.employee_id === callerEmployeeId);
-      }
 
       const requestedStatus = args.status || "all";
       if (["pending", "approved", "rejected"].includes(requestedStatus)) {
