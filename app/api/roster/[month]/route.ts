@@ -222,6 +222,24 @@ export async function POST(
   const sql = neon(process.env.DATABASE_URL!);
 
   try {
+    // Ensure a version row exists before taking the scheduler input snapshot.
+    // The final compare-and-swap prevents a concurrent generation based on the
+    // same roster version from overwriting the winner.
+    const monthId = `roster-${month}`;
+    await sql`
+      INSERT INTO roster_months (id, month, status, generated_at, updated_at)
+      VALUES (${monthId}, ${month}, 'draft', now(), now())
+      ON CONFLICT (month) DO NOTHING;
+    `;
+    const versionRows = await sql`SELECT updated_at FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
+    if (!versionRows.length) {
+      throw new Error("Unable to initialize roster version for this month.");
+    }
+    const expectedRosterVersion = versionRows[0].updated_at instanceof Date
+      ? versionRows[0].updated_at.toISOString()
+      : new Date(versionRows[0].updated_at).toISOString();
+    const generationToken = new Date().toISOString();
+
     // Fetch master data needed for scheduler
     const employeesRaw = await sql`SELECT id, name, email, pod_id, active FROM employees WHERE active = true;`;
     const bpRaw = await sql`
@@ -322,24 +340,28 @@ export async function POST(
 
     // Persist the complete generated roster atomically. A failure in any
     // delete/insert/audit statement rolls the entire generation back.
-    const monthId = `roster-${month}`;
     const txResults = await sql.transaction((tx) => {
       const statements: any[] = [
         tx`
-          INSERT INTO roster_months (id, month, status, generated_at, updated_at)
-          VALUES (${monthId}, ${month}, 'draft', now(), now())
-          ON CONFLICT (month) DO UPDATE
-          SET status = 'draft', generated_at = now(), updated_at = now();
+          UPDATE roster_months
+          SET status = 'draft', generated_at = now(), updated_at = ${generationToken}::timestamptz
+          WHERE id = ${monthId} AND updated_at = ${expectedRosterVersion}::timestamptz
+          RETURNING id;
         `,
-        tx`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND pinned = false;`,
-        tx`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`,
+        tx`DELETE FROM roster_days
+          WHERE roster_month_id = ${monthId} AND pinned = false
+            AND EXISTS (SELECT 1 FROM roster_months WHERE id = ${monthId} AND updated_at = ${generationToken}::timestamptz);`,
+        tx`DELETE FROM conflicts
+          WHERE roster_month_id = ${monthId}
+            AND EXISTS (SELECT 1 FROM roster_months WHERE id = ${monthId} AND updated_at = ${generationToken}::timestamptz);`,
       ];
 
       for (const day of scheduleResult.days) {
         const rdId = `rd-${monthId}-${day.employeeId}-${day.date}-${day.brandProcessId || "none"}`;
         statements.push(tx`
           INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-          VALUES (${rdId}, ${monthId}, ${day.employeeId}, ${day.date}, ${day.status as any}, ${day.brandProcessId || null}, ${day.pinned || false}, ${day.notes || null}, now(), now())
+          SELECT ${rdId}, ${monthId}, ${day.employeeId}, ${day.date}, ${day.status as any}, ${day.brandProcessId || null}, ${day.pinned || false}, ${day.notes || null}, now(), now()
+          WHERE EXISTS (SELECT 1 FROM roster_months WHERE id = ${monthId} AND updated_at = ${generationToken}::timestamptz)
           ON CONFLICT (roster_month_id, employee_id, date, brand_process_id)
           DO UPDATE SET status = EXCLUDED.status, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
         `);
@@ -349,17 +371,26 @@ export async function POST(
         const cId = `cf-${monthId}-${c.id}`;
         statements.push(tx`
           INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
-          VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now());
+          SELECT ${cId}, ${monthId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now()
+          WHERE EXISTS (SELECT 1 FROM roster_months WHERE id = ${monthId} AND updated_at = ${generationToken}::timestamptz);
         `);
       }
 
       statements.push(tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
-        VALUES (${`audit-${randomUUID()}`}, ${user?.id || null}, 'ROSTER_GENERATED', 'roster_months', ${monthId}, ${JSON.stringify(scheduleResult.metrics)}::jsonb, now(), now());
+        SELECT ${`audit-${randomUUID()}`}, ${user?.id || null}, 'ROSTER_GENERATED', 'roster_months', ${monthId}, ${JSON.stringify(scheduleResult.metrics)}::jsonb, now(), now()
+        WHERE EXISTS (SELECT 1 FROM roster_months WHERE id = ${monthId} AND updated_at = ${generationToken}::timestamptz);
       `);
       return statements;
     });
 
+
+    if (!txResults[0] || txResults[0].length === 0) {
+      return NextResponse.json(
+        { error: "Another roster generation completed first. Please refresh and generate again." },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
