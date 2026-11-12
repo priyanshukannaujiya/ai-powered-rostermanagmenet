@@ -19,13 +19,14 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { MonthPicker } from "@/components/ui/MonthPicker";
 import { cn } from "@/lib/utils";
 import { realtimeSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function DimensionViewsPage() {
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [currentMonth, setCurrentMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
   const [activeTab, setActiveTab] = useState<"brand" | "process" | "pod" | "employee">("brand");
 
   const { data, isLoading, mutate } = useSWR(`/api/roster/${currentMonth}`, fetcher, realtimeSWR);
@@ -74,52 +75,55 @@ export default function DimensionViewsPage() {
           </p>
         </div>
 
-        {/* Tab Controls */}
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl self-start md:self-auto overflow-x-auto max-w-full">
-          <button
-            onClick={() => setActiveTab("brand")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
-              activeTab === "brand"
-                ? "bg-white text-indigo-700 shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
-            )}
-          >
-            <Building2 className="w-3.5 h-3.5" /> Brand
-          </button>
-          <button
-            onClick={() => setActiveTab("process")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
-              activeTab === "process"
-                ? "bg-white text-indigo-700 shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
-            )}
-          >
-            <Cpu className="w-3.5 h-3.5" /> Process
-          </button>
-          <button
-            onClick={() => setActiveTab("pod")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
-              activeTab === "pod"
-                ? "bg-white text-indigo-700 shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
-            )}
-          >
-            <Users className="w-3.5 h-3.5" /> Pod
-          </button>
-          <button
-            onClick={() => setActiveTab("employee")}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
-              activeTab === "employee"
-                ? "bg-white text-indigo-700 shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
-            )}
-          >
-            <User className="w-3.5 h-3.5" /> Employee
-          </button>
+        {/* Tab Controls & Month Picker */}
+        <div className="flex flex-wrap items-center gap-3 self-start md:self-auto">
+          <MonthPicker currentMonth={currentMonth} onMonthChange={setCurrentMonth} />
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto max-w-full">
+            <button
+              onClick={() => setActiveTab("brand")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
+                activeTab === "brand"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              )}
+            >
+              <Building2 className="w-3.5 h-3.5" /> Brand
+            </button>
+            <button
+              onClick={() => setActiveTab("process")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
+                activeTab === "process"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              )}
+            >
+              <Cpu className="w-3.5 h-3.5" /> Process
+            </button>
+            <button
+              onClick={() => setActiveTab("pod")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
+                activeTab === "pod"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              )}
+            >
+              <Users className="w-3.5 h-3.5" /> Pod
+            </button>
+            <button
+              onClick={() => setActiveTab("employee")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0",
+                activeTab === "employee"
+                  ? "bg-white text-indigo-700 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              )}
+            >
+              <User className="w-3.5 h-3.5" /> Employee
+            </button>
+          </div>
         </div>
       </div>
 

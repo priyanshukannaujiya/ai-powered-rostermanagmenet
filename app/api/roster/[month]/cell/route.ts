@@ -4,6 +4,7 @@ import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { z } from "zod";
 import { createEmployeeNotification } from "@/lib/notifications/create";
+import { syncRosterConflicts } from "@/lib/scheduler/sync-conflicts";
 
 export const dynamic = "force-dynamic";
 
@@ -104,8 +105,12 @@ export async function PUT(
       );
     `;
 
-    // Clear stale conflict records so resolved workarounds immediately unblock publication.
-    await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
+    // Re-synchronize conflict records so the roster and dashboard immediately reflect live staffing status
+    try {
+      await syncRosterConflicts(sql, month);
+    } catch (syncErr) {
+      console.error("Sync conflicts after cell edit warning:", syncErr);
+    }
 
     let brandName: string | null = null;
     let brandCode: string | null = null;

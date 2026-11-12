@@ -55,7 +55,11 @@ export default function ApprovalsQueuePage() {
       mutateNotifications();
     };
     window.addEventListener("roster:refresh", handleRefresh);
-    return () => window.removeEventListener("roster:refresh", handleRefresh);
+    window.addEventListener("leave:refresh", handleRefresh);
+    return () => {
+      window.removeEventListener("roster:refresh", handleRefresh);
+      window.removeEventListener("leave:refresh", handleRefresh);
+    };
   }, [mutate, mutateNotifications]);
 
   const handleOpenPreview = async (leave: any) => {
@@ -111,6 +115,8 @@ export default function ApprovalsQueuePage() {
         mutate();
         mutateNotifications();
         window.dispatchEvent(new CustomEvent("roster:refresh"));
+        window.dispatchEvent(new CustomEvent("leave:refresh"));
+        window.dispatchEvent(new CustomEvent("leave:refresh"));
       } else {
         showToast({
           type: "error",
@@ -139,6 +145,7 @@ export default function ApprovalsQueuePage() {
         mutate();
         mutateNotifications();
         window.dispatchEvent(new CustomEvent("roster:refresh"));
+        window.dispatchEvent(new CustomEvent("leave:refresh"));
       } else {
         showToast({ type: "error", title: "Rejection Failed", message: json.error || "Could not reject leave." });
       }

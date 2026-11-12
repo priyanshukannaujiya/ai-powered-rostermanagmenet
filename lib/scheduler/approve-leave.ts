@@ -305,6 +305,16 @@ export async function approveLeaveAndReplan({
   await sql`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND date >= ${startDate} AND pinned = false;`;
   await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
 
+  // Explicitly remove any prior shifts (pinned or unpinned) for the absent employee during the leave period
+  await sql`
+    DELETE FROM roster_days
+    WHERE roster_month_id = ${monthId}
+      AND employee_id = ${leave.employee_id}
+      AND date >= ${startDate}
+      AND date <= ${endDate};
+  `;
+
+  // Insert updated days for other colleagues from the replan solver
   for (const d of replanResult.updatedDays) {
     if (d.date < startDate) continue;
     // The absent employee's leave window is written deterministically below.
@@ -319,23 +329,22 @@ export async function approveLeaveAndReplan({
     `;
   }
 
-  // Pin the approved leave itself. Delete-then-insert removes any surviving
-  // working assignment for those dates so no duplicate/conflicting row remains.
-  for (const monthRecord of generatedMonths as Array<{ id: string; month: string }>) {
-    const datesForMonth = leaveDatesByMonth.get(monthRecord.month) || [];
-    for (const leaveDate of datesForMonth) {
-      await sql`
-        DELETE FROM roster_days
-        WHERE roster_month_id = ${monthRecord.id}
-          AND employee_id = ${leave.employee_id}
-          AND date = ${leaveDate};
-      `;
-      const leaveDayId = `rd-${monthRecord.id}-${leave.employee_id}-${leaveDate}-leave`;
-      await sql`
-        INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
-        VALUES (${leaveDayId}, ${monthRecord.id}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now());
-      `;
-    }
+  // Pin the approved leave itself as a dedicated 'leave' record for all leave dates.
+  for (const leaveDate of leaveDates) {
+    const dMonth = leaveDate.slice(0, 7);
+    const dMonthId = `roster-${dMonth}`;
+    const leaveDayId = `rd-${dMonthId}-${leave.employee_id}-${leaveDate}-leave`;
+    await sql`
+      DELETE FROM roster_days
+      WHERE roster_month_id = ${dMonthId}
+        AND employee_id = ${leave.employee_id}
+        AND date = ${leaveDate};
+    `;
+    await sql`
+      INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
+      VALUES (${leaveDayId}, ${dMonthId}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now())
+      ON CONFLICT (id) DO UPDATE SET status = 'leave', brand_process_id = NULL, pinned = true, notes = ${APPROVED_LEAVE_NOTE}, updated_at = now();
+    `;
   }
 
   for (const c of replanResult.updatedConflicts) {

@@ -15,6 +15,7 @@ import {
 
 import { formatDateOnly } from "@/lib/date-utils";
 import { isValidRosterMonth } from "@/lib/import/month";
+import { syncRosterConflicts } from "@/lib/scheduler/sync-conflicts";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +58,7 @@ export async function GET(
     }));
 
     // 3. Fetch conflicts
-    const conflictsRaw = rosterMonth
+    let conflictsRaw = rosterMonth
       ? await sql`
           SELECT c.*, b.name as brand_name, p.code as process_code, e.name as employee_name
           FROM conflicts c
@@ -69,6 +70,24 @@ export async function GET(
           ORDER BY c.severity DESC, c.date ASC;
         `
       : [];
+
+    if (rosterMonth && conflictsRaw.length === 0 && days.length > 0) {
+      try {
+        await syncRosterConflicts(sql, month);
+        conflictsRaw = await sql`
+          SELECT c.*, b.name as brand_name, p.code as process_code, e.name as employee_name
+          FROM conflicts c
+          LEFT JOIN brand_processes bp ON c.brand_process_id = bp.id
+          LEFT JOIN brands b ON bp.brand_id = b.id
+          LEFT JOIN processes p ON bp.process_id = p.id
+          LEFT JOIN employees e ON c.employee_id = e.id
+          WHERE c.roster_month_id = ${rosterMonth.id}
+          ORDER BY c.severity DESC, c.date ASC;
+        `;
+      } catch (syncErr) {
+        console.error("Auto sync conflicts warning:", syncErr);
+      }
+    }
 
     const conflictsList = conflictsRaw.map((c: any) => ({
       ...c,

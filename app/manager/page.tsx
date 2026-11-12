@@ -22,6 +22,9 @@ import {
   ExternalLink,
   Download,
   Printer,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
 import { Button } from "@/components/ui/Button";
@@ -30,13 +33,14 @@ import { StatCard } from "@/components/ui/StatCard";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
-import { formatMonthYear } from "@/lib/utils";
+import { MonthPicker } from "@/components/ui/MonthPicker";
+import { formatMonthYear, cn } from "@/lib/utils";
 import { dashboardSWR } from "@/lib/swr-config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function ManagerDashboard() {
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [currentMonth, setCurrentMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
   const { showToast } = useToast();
 
   const { data, error, isLoading, mutate } = useSWR(
@@ -48,6 +52,12 @@ export default function ManagerDashboard() {
   const [generating, setGenerating] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [secondsAgo, setSecondsAgo] = useState(0);
+
+  // Conflicts filter & pagination
+  const [conflictTab, setConflictTab] = useState<"all" | "blocking" | "warning">("all");
+  const [conflictSearch, setConflictSearch] = useState<string>("");
+  const [conflictPage, setConflictPage] = useState<number>(1);
+  const PAGE_SIZE = 10;
 
   // Timer for "Updated X seconds ago"
   useEffect(() => {
@@ -261,7 +271,28 @@ export default function ManagerDashboard() {
   const totalPods = data?.meta?.pods?.length ?? 0;
   const totalBrands = data?.meta?.brands?.length ?? 0;
 
-  const topAtRisk = blockingConflicts.slice(0, 5);
+  const filteredConflicts = React.useMemo(() => {
+    let list = conflicts;
+    if (conflictTab === "blocking") list = list.filter((c: any) => c.severity === "blocking");
+    if (conflictTab === "warning") list = list.filter((c: any) => c.severity === "warning");
+    if (conflictSearch.trim()) {
+      const q = conflictSearch.toLowerCase();
+      list = list.filter((c: any) =>
+        (c.message && c.message.toLowerCase().includes(q)) ||
+        (c.brand_name && c.brand_name.toLowerCase().includes(q)) ||
+        (c.process_code && c.process_code.toLowerCase().includes(q)) ||
+        (c.date && c.date.includes(q)) ||
+        (c.suggested_fix && c.suggested_fix.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [conflicts, conflictTab, conflictSearch]);
+
+  const totalConflictPages = Math.max(1, Math.ceil(filteredConflicts.length / PAGE_SIZE));
+  const paginatedConflicts = filteredConflicts.slice(
+    (conflictPage - 1) * PAGE_SIZE,
+    conflictPage * PAGE_SIZE
+  );
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -311,6 +342,8 @@ export default function ManagerDashboard() {
 
         {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-2.5">
+          <MonthPicker currentMonth={currentMonth} onMonthChange={setCurrentMonth} />
+
           <Button
             onClick={handleGenerate}
             disabled={generating || isPublished || totalEmployees === 0}
@@ -436,22 +469,73 @@ export default function ManagerDashboard() {
         </div>
       )}
 
-      {/* Top 5 Most At-Risk Brand Process Days */}
+      {/* Staffing Shortages & Conflicts */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <CardTitle>Top At-Risk Brand-Process Shifts</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle>Staffing Shortages & Conflicts</CardTitle>
+              <Badge variant={conflicts.length > 0 ? "blocking" : "success"} size="sm">
+                {conflicts.length} Total
+              </Badge>
+            </div>
             <CardDescription>
-              Unstaffed operating shifts and single-resource brand coverage risks
+              Unstaffed operating shifts, headcount shortages, and consecutive day warnings for {formatMonthYear(currentMonth)}
             </CardDescription>
           </div>
-          <Link
-            href={`/manager/roster/${currentMonth}`}
-            className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold flex items-center gap-1 group"
-          >
-            <span>Inspect grid</span>
-            <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-          </Link>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Filter Tabs */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+              <button
+                onClick={() => { setConflictTab("all"); setConflictPage(1); }}
+                className={cn(
+                  "px-2.5 py-1 rounded-lg transition-all",
+                  conflictTab === "all" ? "bg-white text-indigo-700 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                )}
+              >
+                All ({conflicts.length})
+              </button>
+              <button
+                onClick={() => { setConflictTab("blocking"); setConflictPage(1); }}
+                className={cn(
+                  "px-2.5 py-1 rounded-lg transition-all",
+                  conflictTab === "blocking" ? "bg-white text-rose-700 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                )}
+              >
+                Blocking ({blockingConflicts.length})
+              </button>
+              <button
+                onClick={() => { setConflictTab("warning"); setConflictPage(1); }}
+                className={cn(
+                  "px-2.5 py-1 rounded-lg transition-all",
+                  conflictTab === "warning" ? "bg-white text-amber-700 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                )}
+              >
+                Warnings ({warnings.length})
+              </button>
+            </div>
+
+            {/* Quick Search */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search conflicts..."
+                value={conflictSearch}
+                onChange={(e) => { setConflictSearch(e.target.value); setConflictPage(1); }}
+                className="pl-8 pr-3 py-1 bg-white border border-slate-200 rounded-lg text-xs placeholder:text-slate-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 w-40 sm:w-48"
+              />
+            </div>
+
+            <Link
+              href={`/manager/roster/${currentMonth}`}
+              className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold flex items-center gap-1 group shrink-0"
+            >
+              <span>Inspect grid</span>
+              <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+            </Link>
+          </div>
         </CardHeader>
 
         {isLoading && !data ? (
@@ -460,52 +544,101 @@ export default function ManagerDashboard() {
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
           </div>
-        ) : topAtRisk.length === 0 ? (
+        ) : filteredConflicts.length === 0 ? (
           <EmptyState
             icon={<CheckCircle2 className="w-6 h-6 text-emerald-600" />}
-            title="All Brand Processes Covered"
-            description="No blocking conflicts detected for this operating month. Every D2C brand meets minimum headcount requirements."
+            title={conflictSearch ? "No Matching Conflicts" : "All Brand Processes Covered"}
+            description={
+              conflictSearch
+                ? `No conflicts matched "${conflictSearch}".`
+                : `No conflicts detected for ${formatMonthYear(currentMonth)}. Every D2C brand meets minimum headcount requirements.`
+            }
           />
         ) : (
-          <div className="divide-y divide-slate-100">
-            {topAtRisk.map((c: any) => (
-              <div
-                key={c.id}
-                className="p-4 sm:p-5 hover:bg-slate-50/80 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs"
-              >
-                <div className="space-y-1.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="blocking" dot>
-                      Blocking
-                    </Badge>
-                    <span className="font-bold text-slate-900 font-mono">{c.date}</span>
-                    <span className="text-slate-300">•</span>
-                    <span className="font-semibold text-indigo-700">
-                      {c.brand_name || "Brand"}
-                    </span>
-                    <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] text-slate-700 font-mono font-bold">
-                      {c.process_code}
-                    </span>
-                  </div>
-                  <p className="text-slate-700 leading-relaxed font-normal">{c.message}</p>
-                  {c.suggested_fix && (
-                    <div className="text-emerald-800 font-medium text-[11px] bg-emerald-50/90 border border-emerald-200/70 px-2.5 py-1 rounded-xl inline-flex items-center gap-1.5 mt-1">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      <span>Suggested Fix: {c.suggested_fix}</span>
-                    </div>
-                  )}
-                </div>
-
-                <Link
-                  href={`/manager/roster/${currentMonth}?date=${c.date}`}
-                  className="shrink-0 self-start md:self-center"
+          <div>
+            <div className="divide-y divide-slate-100">
+              {paginatedConflicts.map((c: any) => (
+                <div
+                  key={c.id}
+                  className="p-4 sm:p-5 hover:bg-slate-50/80 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs"
                 >
-                  <Button variant="secondary" size="xs">
-                    Resolve in Grid
+                  <div className="space-y-1.5 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={c.severity === "blocking" ? "blocking" : "warning"} dot>
+                        {c.severity === "blocking" ? "Blocking" : "Warning"}
+                      </Badge>
+                      {c.date && <span className="font-bold text-slate-900 font-mono">{c.date}</span>}
+                      {c.brand_name && (
+                        <>
+                          <span className="text-slate-300">•</span>
+                          <span className="font-semibold text-indigo-700">{c.brand_name}</span>
+                        </>
+                      )}
+                      {c.process_code && (
+                        <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] text-slate-700 font-mono font-bold">
+                          {c.process_code}
+                        </span>
+                      )}
+                      {c.employee_name && (
+                        <>
+                          <span className="text-slate-300">•</span>
+                          <span className="text-slate-600 font-medium">{c.employee_name}</span>
+                        </>
+                      )}
+                    </div>
+                    <p className="text-slate-700 leading-relaxed font-normal">{c.message}</p>
+                    {c.suggested_fix && (
+                      <div className="text-emerald-800 font-medium text-[11px] bg-emerald-50/90 border border-emerald-200/70 px-2.5 py-1 rounded-xl inline-flex items-center gap-1.5 mt-1">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Suggested Fix: {c.suggested_fix}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <Link
+                    href={`/manager/roster/${currentMonth}${c.date ? `?date=${c.date}` : ""}`}
+                    className="shrink-0 self-start md:self-center"
+                  >
+                    <Button variant="secondary" size="xs">
+                      Resolve in Grid
+                    </Button>
+                  </Link>
+                </div>
+              ))}
+            </div>
+
+            {/* Pagination Controls */}
+            {totalConflictPages > 1 && (
+              <div className="p-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  Showing {(conflictPage - 1) * PAGE_SIZE + 1} to{" "}
+                  {Math.min(conflictPage * PAGE_SIZE, filteredConflicts.length)} of {filteredConflicts.length} conflicts
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={conflictPage <= 1}
+                    onClick={() => setConflictPage((p) => Math.max(1, p - 1))}
+                    icon={<ChevronLeft className="w-3.5 h-3.5" />}
+                  >
+                    Previous
                   </Button>
-                </Link>
+                  <span className="font-mono text-xs font-semibold px-2">
+                    {conflictPage} / {totalConflictPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={conflictPage >= totalConflictPages}
+                    onClick={() => setConflictPage((p) => Math.min(totalConflictPages, p + 1))}
+                    icon={<ChevronRight className="w-3.5 h-3.5" />}
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
-            ))}
+            )}
           </div>
         )}
       </Card>

@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
         JOIN employees e ON n.employee_id = e.id
         WHERE n.employee_id = ${sessionEmployeeId}
         ORDER BY n.created_at DESC
-        LIMIT 20;
+        LIMIT 50;
       `;
     } else if (role === "pod_lead") {
       if (!sessionEmployeeId) {

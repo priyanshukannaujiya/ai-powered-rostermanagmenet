@@ -104,7 +104,7 @@ export default function EmployeePortalPage() {
   } = useSWR<ApiScheduleResponse>(
     `/api/me/schedule?month=${currentMonth}`,
     fetcher,
-    realtimeSWR
+    liveSWR
   );
 
   // Revalidate schedule, leaves and notifications after any write anywhere.

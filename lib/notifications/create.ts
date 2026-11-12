@@ -29,28 +29,25 @@ export async function createEmployeeNotification(
   const podLeadNotificationId =
     podLeadId && podLeadId !== input.employeeId ? `notif-${randomUUID()}` : null;
   const metadata = JSON.stringify(input.metadata || {});
-  const queries = [
-    sql`
-      INSERT INTO notifications (id, employee_id, title, message, type, date, read, metadata, created_at, updated_at)
-      VALUES (
-        ${notificationId}, ${input.employeeId}, ${input.title}, ${input.message},
-        ${input.type}, ${input.date || null}, false, ${metadata}::jsonb, now(), now()
-      );
-    `,
-  ];
+  await sql`
+    INSERT INTO notifications (id, employee_id, title, message, type, date, read, metadata, created_at, updated_at)
+    VALUES (
+      ${notificationId}, ${input.employeeId}, ${input.title}, ${input.message},
+      ${input.type}, ${input.date || null}, false, ${metadata}::jsonb, now(), now()
+    );
+  `;
 
   if (podLeadNotificationId && podLeadId) {
     const employeeName = employeeRows[0]?.name || "An employee";
-    queries.push(sql`
+    await sql`
       INSERT INTO notifications (id, employee_id, title, message, type, date, read, metadata, created_at, updated_at)
       VALUES (
         ${podLeadNotificationId}, ${podLeadId}, ${`Pod update: ${input.title}`},
         ${`${employeeName}: ${input.message}`}, ${input.type}, ${input.date || null},
         false, ${JSON.stringify({ ...(input.metadata || {}), employeeId: input.employeeId })}::jsonb, now(), now()
       );
-    `);
+    `;
   }
 
-  await sql.transaction(queries);
   return { notificationId, podLeadNotificationId };
 }

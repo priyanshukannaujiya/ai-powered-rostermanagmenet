@@ -36,6 +36,9 @@ export interface ScheduleDay {
   brandName: string | null;
   brandCode: string | null;
   processCode: string | null;
+  brand_name?: string | null;
+  brand_code?: string | null;
+  process_code?: string | null;
   brandProcessId: string | null;
   notes: string | null;
   holidayName: string | null;
@@ -207,6 +210,9 @@ export function buildEmployeeSchedule(params: {
       brandName,
       brandCode,
       processCode,
+      brand_name: brandName,
+      brand_code: brandCode,
+      process_code: processCode,
       brandProcessId,
       notes,
       holidayName,
