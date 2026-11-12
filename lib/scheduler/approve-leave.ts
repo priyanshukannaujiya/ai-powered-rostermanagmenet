@@ -114,7 +114,16 @@ export async function approveLeaveAndReplan({
       const updateResult = await sql`
         UPDATE leaves
         SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = now(), updated_at = now()
-        WHERE id = ${leaveId} AND status = 'pending'
+        WHERE id = ${leaveId}
+          AND status = 'pending'
+          AND (
+            ${reviewerRole} <> 'pod_lead'
+            OR EXISTS (
+              SELECT 1 FROM pods p
+              WHERE p.id = ${leave.pod_id}
+                AND p.lead_employee_id = ${reviewerEmployeeId || null}
+            )
+          )
         RETURNING id;
       `;
       if (!updateResult || updateResult.length === 0) {
@@ -370,6 +379,14 @@ export async function approveLeaveAndReplan({
         SET status = 'approved', reviewed_by = ${reviewerUserId}, reviewed_at = transaction_timestamp(), updated_at = now()
         WHERE id = ${leaveId}
           AND status = 'pending'
+          AND (
+            ${reviewerRole} <> 'pod_lead'
+            OR EXISTS (
+              SELECT 1 FROM pods p
+              WHERE p.id = ${leave.pod_id}
+                AND p.lead_employee_id = ${reviewerEmployeeId || null}
+            )
+          )
           AND (
             SELECT COUNT(*) = ${expectedRosterVersions.length}
             FROM roster_months
