@@ -38,42 +38,48 @@ export async function POST(
       }
     }
 
-    const auditId = `audit-${Date.now()}`;
+    const auditId = `audit-${randomUUID()}`;
     const notifId = `notif-${randomUUID()}`;
     const startDate = formatDateOnly(leave[0].start_date);
     const endDate = formatDateOnly(leave[0].end_date);
-    const notifTitle = "Leave request rejected";
     const notifMessage = `Your leave request for ${startDate} to ${endDate} was not approved.`;
     const notifMeta = JSON.stringify({ leaveId, status: "rejected" });
+    const reviewedAt = new Date().toISOString();
 
-    // Upfront atomic claim: only the reviewer who claims pending status can proceed
-    const claim = await sql`
-      UPDATE leaves
-      SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = now(), updated_at = now()
-      WHERE id = ${leaveId} AND status = 'pending'
-      RETURNING id;
-    `;
-
-    if (!claim || claim.length === 0) {
-      return NextResponse.json(
-        { error: "This leave request was already reviewed or is no longer pending." },
-        { status: 409 }
-      );
-    }
-
-    // Atomic execution of audit log and notification within a single transaction
-    await sql.transaction((tx) => [
+    // Status, audit, and notification share one transaction. Dependent writes
+    // only occur if this request successfully claims the pending leave.
+    const txResults = await sql.transaction((tx) => [
+      tx`
+        UPDATE leaves
+        SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = ${reviewedAt}, updated_at = now()
+        WHERE id = ${leaveId}
+          AND status = 'pending'
+          AND (
+            ${user!.role} = 'manager'
+            OR EXISTS (
+              SELECT 1 FROM pods p
+              WHERE p.id = ${leave[0].pod_id} AND p.lead_employee_id = ${user!.employeeId}
+            )
+          );
+      `,
       tx`
         INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
-        VALUES (${auditId}, ${user!.id}, 'LEAVE_REJECTED', 'leaves', ${leaveId}, ${JSON.stringify({ status: "rejected" })}, now(), now());
+        SELECT ${auditId}, ${user!.id}, 'LEAVE_REJECTED', 'leaves', ${leaveId}, ${notifMeta}::jsonb, now(), now()
+        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'rejected' AND reviewed_by = ${user!.id} AND reviewed_at = ${reviewedAt}::timestamptz);
       `,
       tx`
         INSERT INTO notifications (id, employee_id, title, message, type, date, metadata, read, created_at, updated_at)
-        VALUES (${notifId}, ${leave[0].employee_id}, ${notifTitle}, ${notifMessage}, 'leave_rejected', ${startDate}, ${notifMeta}, false, now(), now())
-        ON CONFLICT (id) DO NOTHING;
+        SELECT ${notifId}, ${leave[0].employee_id}, 'Leave request rejected', ${notifMessage}, 'leave_rejected', ${startDate}, ${notifMeta}::jsonb, false, now(), now()
+        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'rejected' AND reviewed_by = ${user!.id} AND reviewed_at = ${reviewedAt}::timestamptz);
       `,
     ]);
 
+    if (!txResults[0] || txResults[0].length === 0) {
+      return NextResponse.json(
+        { error: "This leave request was already reviewed or is no longer within your assigned pod." },
+        { status: 409 }
+      );
+    }
     return NextResponse.json({ success: true, message: "Leave rejected successfully" });
   } catch (error: any) {
     console.error("Reject leave error:", error);
