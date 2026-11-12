@@ -4,10 +4,31 @@ import {
   groupDatesByMonth,
   getMonthBounds,
   isDateOnApprovedLeave,
+  isValidCalendarDate,
 } from "./leave-days";
 import { dedupeRosterDays, buildEmployeeSchedule, type RosterDayRow } from "@/lib/me/build-schedule";
 
 describe("Cross-Month Leave Handling & Edge Cases", () => {
+  it("strictly validates calendar dates and rejects invalid dates", () => {
+    expect(isValidCalendarDate("2026-11-30")).toBe(true);
+    expect(isValidCalendarDate("2026-02-28")).toBe(true);
+    expect(isValidCalendarDate("2028-02-29")).toBe(true); // leap year
+
+    expect(isValidCalendarDate("2026-02-29")).toBe(false); // non-leap year
+    expect(isValidCalendarDate("2026-11-31")).toBe(false); // November has 30 days
+    expect(isValidCalendarDate("2026-04-31")).toBe(false); // April has 30 days
+    expect(isValidCalendarDate("not-a-date")).toBe(false);
+  });
+
+  it("throws clear error on invalid date in enumerateDateRange", () => {
+    expect(() => enumerateDateRange("2026-11-31", "2026-12-05")).toThrow("is not a valid calendar date");
+    expect(() => enumerateDateRange("2026-12-05", "2026-11-01")).toThrow("cannot be after end date");
+  });
+
+  it("throws clear error when date range exceeds 366 days", () => {
+    expect(() => enumerateDateRange("2026-01-01", "2027-02-05")).toThrow("exceeds maximum allowable duration");
+  });
+
   it("enumerates inclusive dates across November and December correctly", () => {
     const dates = enumerateDateRange("2026-11-29", "2026-12-03");
     expect(dates).toEqual([
@@ -122,3 +143,4 @@ describe("Cross-Month Leave Handling & Edge Cases", () => {
     expect(dec01?.brandProcessId).toBeNull();
   });
 });
+

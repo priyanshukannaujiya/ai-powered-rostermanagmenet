@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
-import { createEmployeeNotification } from "@/lib/notifications/create";
 import { formatDateOnly } from "@/lib/date-utils";
+import { randomUUID } from "crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -38,43 +38,42 @@ export async function POST(
       }
     }
 
-    await sql`
-      UPDATE leaves
-      SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = now(), updated_at = now()
-      WHERE id = ${leaveId};
-    `;
+    const auditId = `audit-${Date.now()}`;
+    const notifId = `notif-${randomUUID()}`;
+    const startDate = formatDateOnly(leave[0].start_date);
+    const endDate = formatDateOnly(leave[0].end_date);
+    const notifTitle = "Leave request rejected";
+    const notifMessage = `Your leave request for ${startDate} to ${endDate} was not approved.`;
+    const notifMeta = JSON.stringify({ leaveId, status: "rejected" });
 
-    await sql`
-      INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
-      VALUES (
-        ${`audit-${Date.now()}`},
-        ${user!.id},
-        'LEAVE_REJECTED',
-        'leaves',
-        ${leaveId},
-        ${JSON.stringify({ status: "rejected" })},
-        now(),
-        now()
+    // Atomic execution of status update, audit log and notification within a single transaction
+    const txResults = await sql.transaction((tx) => [
+      tx`
+        UPDATE leaves
+        SET status = 'rejected', reviewed_by = ${user!.id}, reviewed_at = now(), updated_at = now()
+        WHERE id = ${leaveId} AND status = 'pending'
+        RETURNING id;
+      `,
+      tx`
+        INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, after, created_at, updated_at)
+        VALUES (${auditId}, ${user!.id}, 'LEAVE_REJECTED', 'leaves', ${leaveId}, ${JSON.stringify({ status: "rejected" })}, now(), now());
+      `,
+      tx`
+        INSERT INTO notifications (id, employee_id, title, message, type, date, metadata, read, created_at, updated_at)
+        VALUES (${notifId}, ${leave[0].employee_id}, ${notifTitle}, ${notifMessage}, 'leave_rejected', ${startDate}, ${notifMeta}, false, now(), now())
+        ON CONFLICT (id) DO NOTHING;
+      `,
+    ]);
+
+    const updatedRows = txResults[0] || [];
+    if (updatedRows.length === 0) {
+      return NextResponse.json(
+        { error: "This leave request was already reviewed or is no longer pending." },
+        { status: 409 }
       );
-    `;
-
-    let notificationWarning: string | undefined;
-    try {
-      await createEmployeeNotification(sql, {
-        employeeId: leave[0].employee_id,
-        title: "Leave request rejected",
-        message: `Your leave request for ${formatDateOnly(leave[0].start_date)} to ${formatDateOnly(leave[0].end_date)} was not approved.`,
-        type: "leave_rejected",
-        date: formatDateOnly(leave[0].start_date),
-        metadata: { leaveId, status: "rejected" },
-        notifyPodLead: true,
-      });
-    } catch (notificationError) {
-      console.error("Leave rejected but notification delivery failed:", notificationError);
-      notificationWarning = "The leave was rejected, but its notification could not be delivered.";
     }
 
-    return NextResponse.json({ success: true, message: "Leave rejected successfully", notificationWarning });
+    return NextResponse.json({ success: true, message: "Leave rejected successfully" });
   } catch (error: any) {
     console.error("Reject leave error:", error);
     return NextResponse.json({ error: error.message || "Failed to reject leave" }, { status: 500 });

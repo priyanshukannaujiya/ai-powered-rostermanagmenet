@@ -11,6 +11,21 @@ export interface MonthBounds {
   daysInMonth: number;
 }
 
+/** Strictly validates that a string is a valid YYYY-MM-DD calendar date (e.g. rejects 2026-02-31, 2026-11-31). */
+export function isValidCalendarDate(dateStr: string): boolean {
+  if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return false;
+  }
+  const [yearStr, monthStr, dayStr] = dateStr.split("-");
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+
+  if (month < 1 || month > 12) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day >= 1 && day <= daysInMonth;
+}
+
 /** Inclusive calendar bounds for a `YYYY-MM` month, safe for 28/29/30/31-day months. */
 export function getMonthBounds(month: string): MonthBounds {
   const [yearStr, monthStr] = month.split("-");
@@ -24,14 +39,36 @@ export function getMonthBounds(month: string): MonthBounds {
   };
 }
 
-/** Every `YYYY-MM-DD` between two dates, inclusive. */
+/**
+ * Every `YYYY-MM-DD` between two dates, inclusive.
+ * Strictly validates calendar dates, prevents inverted ranges, and rejects ranges > 366 days
+ * instead of silently truncating.
+ */
 export function enumerateDateRange(startDate: string, endDate: string): string[] {
-  const dates: string[] = [];
-  const cursor = new Date(`${formatDateOnly(startDate)}T00:00:00.000Z`);
-  const end = new Date(`${formatDateOnly(endDate)}T00:00:00.000Z`);
-  if (Number.isNaN(cursor.getTime()) || Number.isNaN(end.getTime())) return dates;
+  const normStart = formatDateOnly(startDate);
+  const normEnd = formatDateOnly(endDate);
 
-  while (cursor <= end && dates.length <= 400) {
+  if (!isValidCalendarDate(normStart)) {
+    throw new Error(`Invalid start date: '${startDate}' is not a valid calendar date.`);
+  }
+  if (!isValidCalendarDate(normEnd)) {
+    throw new Error(`Invalid end date: '${endDate}' is not a valid calendar date.`);
+  }
+
+  const cursor = new Date(`${normStart}T00:00:00.000Z`);
+  const end = new Date(`${normEnd}T00:00:00.000Z`);
+
+  if (cursor > end) {
+    throw new Error(`Invalid date range: start date '${normStart}' cannot be after end date '${normEnd}'.`);
+  }
+
+  const diffDays = Math.round((end.getTime() - cursor.getTime()) / 86400000) + 1;
+  if (diffDays > 366) {
+    throw new Error(`Date range (${diffDays} days) exceeds maximum allowable duration of 366 days.`);
+  }
+
+  const dates: string[] = [];
+  while (cursor <= end) {
     dates.push(cursor.toISOString().slice(0, 10));
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }

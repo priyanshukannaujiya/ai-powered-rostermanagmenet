@@ -24,7 +24,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { month: string } }
 ) {
-  const { user, errorResponse } = await requireAuth();
+  const { user, errorResponse } = await requireAuth(["manager", "pod_lead"]);
   if (errorResponse) return errorResponse;
 
   const month = params.month;

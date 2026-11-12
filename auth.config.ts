@@ -21,7 +21,7 @@ export const authConfig: NextAuthConfig = {
 
       if (isManagerRoute) {
         if (!isLoggedIn) return false;
-        if (role && role !== "manager" && role !== "pod_lead") return false;
+        if (!role || (role !== "manager" && role !== "pod_lead")) return false;
       }
 
       if (isEmployeeRoute) {
