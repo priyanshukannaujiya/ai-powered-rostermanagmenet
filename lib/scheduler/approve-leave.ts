@@ -353,7 +353,7 @@ export async function approveLeaveAndReplan({
         txStmts.push(tx`
           DELETE FROM conflicts
           WHERE roster_month_id = ${plan.mId}
-            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp());
         `);
       }
 
@@ -366,7 +366,7 @@ export async function approveLeaveAndReplan({
             AND employee_id = ${leave.employee_id}
             AND date >= ${startDate}
             AND date <= ${endDate}
-            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp());
         `);
       }
 
@@ -383,7 +383,7 @@ export async function approveLeaveAndReplan({
           txStmts.push(tx`
             INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
             SELECT ${rdId}, ${plan.mId}, ${d.employeeId}, ${d.date}, ${d.status as any}, ${d.brandProcessId || null}, ${d.pinned || false}, ${d.notes || null}, now(), now()
-            WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz)
+            WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp())
             ON CONFLICT (id)
             DO UPDATE SET status = EXCLUDED.status, brand_process_id = EXCLUDED.brand_process_id, pinned = EXCLUDED.pinned, notes = EXCLUDED.notes, updated_at = now();
           `);
@@ -394,7 +394,7 @@ export async function approveLeaveAndReplan({
           txStmts.push(tx`
             INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
             SELECT ${cId}, ${plan.mId}, ${c.type}, ${c.severity as any}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now()
-            WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz)
+            WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp())
             ON CONFLICT (id) DO UPDATE SET message = EXCLUDED.message, suggested_fix = EXCLUDED.suggested_fix, severity = EXCLUDED.severity, resolved = EXCLUDED.resolved, updated_at = now();
           `);
         }
@@ -412,12 +412,12 @@ export async function approveLeaveAndReplan({
           WHERE roster_month_id = ${dMonthId}
             AND employee_id = ${leave.employee_id}
             AND date = ${leaveDate}
-            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
+            AND EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp());
         `);
         txStmts.push(tx`
           INSERT INTO roster_days (id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at)
           SELECT ${leaveDayId}, ${dMonthId}, ${leave.employee_id}, ${leaveDate}, 'leave', NULL, true, ${APPROVED_LEAVE_NOTE}, now(), now()
-          WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz)
+          WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp())
           ON CONFLICT (id) DO UPDATE SET status = 'leave', brand_process_id = NULL, pinned = true, notes = ${APPROVED_LEAVE_NOTE}, updated_at = now();
         `);
       }
@@ -441,7 +441,7 @@ export async function approveLeaveAndReplan({
           })}::jsonb,
           now(),
           now()
-        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = ${claimAt}::timestamptz);
+        WHERE EXISTS (SELECT 1 FROM leaves WHERE id = ${leaveId} AND status = 'approved' AND reviewed_by = ${reviewerUserId} AND reviewed_at = transaction_timestamp());
       `);
 
       return txStmts;
