@@ -142,6 +142,7 @@ export async function approveLeaveAndReplan({
           type: "leave_approved",
           date: startDate,
           metadata: { leaveId, status: "approved" },
+          eventId: `leave-approved:${leaveId}`,
           notifyPodLead: true,
         });
       } catch (notificationError) {
@@ -539,6 +540,7 @@ export async function approveLeaveAndReplan({
         leaveType: leave.type,
         brands: affectedBrands,
       },
+      eventId: `leave-approved:${leaveId}`,
       notifyPodLead: true,
     });
   } catch (notificationError) {
