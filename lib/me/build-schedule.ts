@@ -18,6 +18,7 @@ export interface RosterDayRow {
   processCode: string | null;
   notes: string | null;
   pinned: boolean;
+  leaveOverride?: boolean;
 }
 
 export interface LeaveRow {
@@ -44,6 +45,7 @@ export interface ScheduleDay {
   holidayName: string | null;
   pinned: boolean;
   pendingLeave: boolean;
+  assignments: Array<{ brandProcessId: string | null; brandName: string | null; brandCode: string | null; processCode: string | null; notes: string | null; pinned: boolean }>;
 }
 
 export interface ScheduleSummary {
@@ -107,6 +109,14 @@ export function buildEmployeeSchedule(params: {
   const { daysInMonth } = getMonthBounds(month);
 
   const rosterByDate = dedupeRosterDays(rosterDays);
+  const workingRowsByDate = new Map<string, RosterDayRow[]>();
+  for (const row of rosterDays) {
+    const date = formatDateOnly(row.date);
+    if (!date || row.status !== "working" || !row.brandProcessId) continue;
+    const rows = workingRowsByDate.get(date) || [];
+    if (!rows.some((item) => item.brandProcessId === row.brandProcessId)) rows.push({ ...row, date });
+    workingRowsByDate.set(date, rows);
+  }
   const holidayByDate = new Map<string, string>();
   for (const holiday of holidays) {
     const date = formatDateOnly(holiday.date);
@@ -143,6 +153,7 @@ export function buildEmployeeSchedule(params: {
     const date = `${month}-${String(dayNum).padStart(2, "0")}`;
     const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
     const roster = rosterByDate.get(date);
+    const workingRows = workingRowsByDate.get(date) || [];
     const approvedLeave = approvedLeaves.find((leave) => coversDate(leave.startDate, leave.endDate, date));
     const pendingLeave = pendingLeaves.find((leave) => coversDate(leave.startDate, leave.endDate, date));
     const holidayName = holidayByDate.get(date) || null;
@@ -154,15 +165,20 @@ export function buildEmployeeSchedule(params: {
     let brandProcessId: string | null = null;
     let notes: string | null = null;
 
-    if (approvedLeave) {
+    const managerOverride = workingRows.some((row) => row.pinned && row.leaveOverride === true);
+    if (approvedLeave && !managerOverride) {
       status = "leave";
       notes = "Approved Leave";
+    } else if (workingRows.length > 0 && (!approvedLeave || managerOverride)) {
+      status = "working";
+      const primary = workingRows[0];
+      brandName = primary.brandName;
+      brandCode = primary.brandCode;
+      processCode = primary.processCode;
+      brandProcessId = primary.brandProcessId;
+      notes = primary.notes;
     } else if (roster && roster.status !== "unassigned") {
       status = (roster.status as CanonicalDayStatus) || "unassigned";
-      brandName = roster.brandName;
-      brandCode = roster.brandCode;
-      processCode = roster.processCode;
-      brandProcessId = roster.brandProcessId;
       notes = roster.notes;
     } else if (holidayName) {
       status = "holiday";
@@ -222,6 +238,14 @@ export function buildEmployeeSchedule(params: {
       holidayName,
       pinned: Boolean(roster?.pinned) || status === "leave",
       pendingLeave: Boolean(pendingLeave),
+      assignments: status === "working" ? workingRows.map((row) => ({
+        brandProcessId: row.brandProcessId,
+        brandName: row.brandName,
+        brandCode: row.brandCode,
+        processCode: row.processCode,
+        notes: row.notes,
+        pinned: row.pinned,
+      })) : [],
     });
   }
 
