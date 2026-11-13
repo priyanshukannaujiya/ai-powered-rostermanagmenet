@@ -21,7 +21,9 @@
 7. [AI Operations Copilot (Architecture, 18 Tools & Prompt Catalog)](#7-ai-operations-copilot)
 8. [Tell Us How You Think (Assessment Section 8 Answers)](#8-tell-us-how-you-think)
 9. [Video Demonstration Walkthrough & Exact Script](#9-video-demonstration-walkthrough)
-10. [Local Setup, Migrations & Verification](#10-local-setup-migrations--verification)
+10. [Challenges & Difficulties Faced](#10-challenges--difficulties-faced)
+11. [One-Week Improvement Plan & Future Scope](#11-one-week-improvement-plan--future-scope)
+12. [Local Setup, Migrations & Verification](#12-local-setup-migrations--verification)
 
 ---
 
@@ -276,14 +278,71 @@ We prioritize **explainability and operational transparency**:
 4. **Explicit Competency Matrix**: Replace heuristic backup scanning with a normalized skills grading table (`skill_level: 1–5`).
 
 ### 8. If you had one additional week to work on this, what would you improve first?
-1. **Peer-to-Peer Shift Swapping**: Self-service shift trade requests between employees with automated constraint checks and pod-lead approval.
-2. **WebSocket / Server-Sent Events (SSE)**: Replace SWR polling with real-time push updates for instant collaborative editing.
-3. **Multi-Shift Time Bands**: Support morning, afternoon, and night shifts with 11-hour mandatory rest period enforcement.
-4. **Calendar Sync (iCal / Google Calendar)**: Two-way calendar subscription feeds for employees.
+I would prioritize improvements that reduce manual coordination and make operational changes reach employees reliably:
+
+1. **Email Automation**: Integrate a transactional email provider through environment-based configuration. Automatically send emails when an employee submits a leave request, when a Pod Lead or Manager approves/rejects it, when a roster is published, and when an employee's shift is changed. Use reusable HTML email templates, secure links back to the relevant portal, delivery-status logging, retry handling, and duplicate-send protection. Keep in-app notifications as the primary application record; email is an additional delivery channel.
+2. **Peer-to-Peer Shift Swapping**: Allow employees to request shift exchanges, validate staffing and rest constraints automatically, and route requests to the Pod Lead for approval.
+3. **Real-Time Updates**: Evaluate Server-Sent Events (SSE) or WebSockets to reduce reliance on frequent polling and make roster changes visible without manual refreshes.
+4. **Multi-Shift Time Bands**: Support morning, afternoon, and night shifts with configurable minimum rest periods and overlap validation.
+5. **Calendar Integration**: Provide read-only iCal feeds first, followed by optional Google Calendar integration for employee schedules.
+6. **Operational Analytics**: Add workload trends, leave patterns, coverage reliability, and email-delivery metrics for managers.
 
 ---
 
-## 9. Video Demonstration Walkthrough
+## 10. Challenges & Difficulties Faced
+
+Building a roster system involved more than displaying shifts in a calendar. The main challenges were coordinating employee availability, client coverage rules, and changes that happen after a roster has already been generated.
+
+### Key technical and product challenges
+
+1. **Modelling complex relationships**: Employees can belong to pods, support multiple brands, and be eligible for different processes. A normalized relational model was needed to represent these relationships without duplicating data.
+2. **Single-resource brand coverage**: Some brands depend on one dedicated employee. A leave day or weekly off can create a coverage gap, so the scheduler must detect the risk instead of silently assigning an ineligible person.
+3. **Constraint-based scheduling**: The engine must balance client headcount requirements with employee availability, weekly offs, leave, assignment validity dates, and the maximum consecutive working-day rule. Resolving one shortage can create another conflict elsewhere.
+4. **Dynamic leave replanning**: Approving leave in the middle of a month requires updating the affected shifts while preserving pinned or historical roster entries and recalculating remaining coverage.
+5. **Database consistency**: Roster edits can involve removing an old assignment, inserting a replacement, and refreshing conflict records. These operations need carefully designed transaction boundaries so a partial failure does not leave inconsistent data.
+6. **Authentication and employee identity mapping**: A valid login account must be associated with the correct employee record. Missing or ambiguous `users.employee_id` links can prevent the employee schedule API from identifying whose calendar to return.
+7. **Role-based access and notification privacy**: Manager, Pod Lead, and Employee users require different data scopes. Notification and roster APIs must enforce authorization on the server, not rely only on frontend visibility.
+8. **Date and timezone handling**: Date-only values, ISO date validation, and timezone conversions can cause off-by-one-day errors or reject valid leave requests if handled inconsistently.
+9. **Production debugging**: Issues that do not appear locally can occur in serverless deployment because of environment configuration, database connectivity, session cookies, or runtime differences. Network responses and deployment logs are essential for diagnosing them.
+
+### Lessons learned
+
+- Treat employee identity, authorization, and data integrity as core domain logic.
+- Validate scheduling rules in the backend even when the UI already validates them.
+- Use transactions for related database writes and make retryable operations idempotent.
+- Return actionable, sanitized API errors rather than hiding every failure behind a generic message.
+- Separate confirmed behavior from planned features; a successful build alone does not prove that a production workflow works end to end.
+
+> **Project status note:** The challenges above describe engineering areas encountered during development and debugging. They should not be interpreted as a claim that every production issue has been fully resolved. Authentication, account linking, roster editing, and live workflow behavior should be verified against the deployed environment.
+
+---
+
+## 11. One-Week Improvement Plan & Future Scope
+
+The following is a proposed one-week plan, not a claim that these features are already implemented. The order prioritizes reliability before adding new functionality.
+
+| Day | Focus | Planned deliverables |
+| :--- | :--- | :--- |
+| **Day 1** | Authentication & account integrity | Reproduce login/CSRF failures; verify role sessions; audit employee-to-user links; create a safe report for missing or ambiguous links. |
+| **Day 2** | Roster editing & database safety | Trace roster-cell failures; make related writes transactional; verify assignment date rules, pinned shifts, and conflict recalculation. |
+| **Day 3** | Leave & Pod Lead workflows | Test leave submission, approval/rejection, Pod Lead scope, and manager/Pod Lead notifications; verify date-only handling. |
+| **Day 4** | Email automation | Integrate a transactional email provider; create templates for leave submitted, leave decision, roster published, and shift changed; add retries, delivery logs, and duplicate-send protection. |
+| **Day 5** | Performance & usability | Profile slow APIs and database queries; review SWR polling; improve loading/error states and responsive navigation. |
+| **Day 6** | Testing & security | Add regression tests for authentication, role permissions, schedule APIs, roster constraints, leave workflows, and notification isolation. |
+| **Day 7** | Deployment & verification | Run typecheck, lint, tests, and production build; deploy to Vercel; perform manager, Pod Lead, and employee smoke tests; document remaining risks. |
+
+### Future scope
+
+- **Automated email notifications** with delivery tracking and configurable templates.
+- **Shift swap workflow** with automatic constraint checks and approval.
+- **Real-time roster collaboration** using SSE or WebSockets after evaluating the operational cost.
+- **Employee calendar integration** through iCal and optional Google Calendar sync.
+- **Advanced workforce analytics** for utilization, workload balance, leave trends, and SLA coverage.
+- **Skills and competency matrix** to improve backup recommendations beyond current assignment eligibility.
+- **Audit and reporting enhancements** with exportable change history and operational summaries.
+- **Scalable scheduling** through pod-level planning, batched writes, and measured database query optimization.
+
+## 12. Video Demonstration Walkthrough
 
 ### ⏱️ Video Structure (3–5 Minutes)
 
@@ -299,7 +358,7 @@ We prioritize **explainability and operational transparency**:
 
 ---
 
-## 10. Local Setup, Migrations & Verification
+## 13. Local Setup, Migrations & Verification
 
 ### 1. Prerequisites
 - Node.js 18+ (tested on Node v20/v24)
