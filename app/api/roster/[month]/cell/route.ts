@@ -56,6 +56,34 @@ export async function PUT(
       );
     }
 
+    if (isOverride && user?.role !== "manager") {
+      return NextResponse.json({ error: "Only managers can override approved leave." }, { status: 403 });
+    }
+    if (isOverride && !overrideReason?.trim()) {
+      return NextResponse.json({ error: "A reason is required for a manager override." }, { status: 400 });
+    }
+
+    const employeeAccess = await sql`
+      SELECT e.id
+      FROM employees e
+      WHERE e.id = ${employeeId}
+        AND e.active = true
+        AND (
+          ${user?.role === "manager"}
+          OR EXISTS (
+            SELECT 1 FROM pods p
+            WHERE p.id = e.pod_id AND p.lead_employee_id = ${user?.employeeId || null}
+          )
+        )
+      LIMIT 1;
+    `;
+    if (employeeAccess.length === 0) {
+      return NextResponse.json(
+        { error: "Employee not found or you do not have access to this employee." },
+        { status: 403 }
+      );
+    }
+
     const monthId = await ensureRosterMonth(sql, month);
 
     // A working shift cannot be forced onto an employee who has approved leave
@@ -197,6 +225,6 @@ export async function PUT(
     });
   } catch (error: any) {
     console.error("Cell update error:", error);
-    return NextResponse.json({ error: error.message || "Failed to update cell" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to update roster cell." }, { status: 500 });
   }
 }

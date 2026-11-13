@@ -16,6 +16,10 @@ export async function GET(
   const sql = neon(process.env.DATABASE_URL!);
   const month = params.month || new Date().toISOString().slice(0, 7);
   const monthId = `roster-${month}`;
+  const isManager = user?.role === "manager";
+  if (!isManager && !user?.employeeId) {
+    return NextResponse.json({ error: "Pod lead account is not linked to an employee." }, { status: 403 });
+  }
 
   const [yearStr, monthStr] = month.split("-");
   const lastDay = new Date(parseInt(yearStr), parseInt(monthStr), 0).getDate();
@@ -39,6 +43,15 @@ export async function GET(
       LEFT JOIN roster_days rd ON rd.brand_process_id = bp.id 
         AND rd.roster_month_id = ${monthId}
         AND rd.status = 'working'
+        AND (
+          ${isManager}
+          OR EXISTS (
+            SELECT 1 FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_employee.id = rd.employee_id
+              AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        )
       GROUP BY b.name, p.code, bp.id, bp.min_headcount_weekday, bp.operating_calendar, rd.date
       ORDER BY b.name, p.code, rd.date;
     `;
@@ -76,6 +89,14 @@ export async function GET(
       JOIN pods p ON e.pod_id = p.id
       LEFT JOIN roster_days rd ON rd.employee_id = e.id AND rd.roster_month_id = ${monthId}
       WHERE e.active = true
+        AND (
+          ${isManager}
+          OR EXISTS (
+            SELECT 1 FROM pods scoped_pod
+            WHERE scoped_pod.id = e.pod_id
+              AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        )
       GROUP BY p.name, e.name, e.id
       ORDER BY p.name, working_shifts DESC;
     `;
@@ -89,15 +110,33 @@ export async function GET(
       FROM brand_processes bp
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id
-      LEFT JOIN assignments a ON a.brand_process_id = bp.id
+      LEFT JOIN assignments a ON a.brand_process_id = bp.id AND a.active = true
+        AND (
+          ${isManager}
+          OR EXISTS (
+            SELECT 1 FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_employee.id = a.employee_id
+              AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        )
       GROUP BY b.name, p.code
       ORDER BY assigned_count ASC;
     `;
 
     const leaveEmployees = await sql`
       SELECT DISTINCT employee_id FROM leaves 
-      WHERE status IN ('approved', 'pending') 
-        AND start_date <= ${monthEnd} AND end_date >= ${monthStart};
+      WHERE status IN ('approved', 'pending')
+        AND start_date <= ${monthEnd} AND end_date >= ${monthStart}
+        AND (
+          ${isManager}
+          OR EXISTS (
+            SELECT 1 FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_employee.id = leaves.employee_id
+              AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        );
     `;
     const leaveEmpIds = new Set(leaveEmployees.map((l: any) => l.employee_id));
 
@@ -107,7 +146,16 @@ export async function GET(
       FROM brand_processes bp
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id
-      LEFT JOIN assignments a ON a.brand_process_id = bp.id;
+      LEFT JOIN assignments a ON a.brand_process_id = bp.id AND a.active = true
+        AND (
+          ${isManager}
+          OR EXISTS (
+            SELECT 1 FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_employee.id = a.employee_id
+              AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        );
     `;
 
     const spofByBp = new Map<string, { brand: string; process: string; employees: string[] }>();
@@ -143,10 +191,29 @@ export async function GET(
         COUNT(*) as count
       FROM leaves
       WHERE start_date <= ${monthEnd} AND end_date >= ${monthStart}
+        AND (
+          ${isManager}
+          OR EXISTS (
+            SELECT 1 FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_employee.id = leaves.employee_id
+              AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        )
       GROUP BY status;
     `;
     const notifCount = await sql`
-      SELECT COUNT(*) as count FROM notifications;
+      SELECT COUNT(*) as count
+      FROM notifications
+      WHERE (
+        ${isManager}
+        OR EXISTS (
+          SELECT 1 FROM employees scoped_employee
+          JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+          WHERE scoped_employee.id = notifications.employee_id
+            AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+        )
+      );
     `;
 
     const leaveFunnel = [
@@ -171,6 +238,22 @@ export async function GET(
         COUNT(*) as count
       FROM conflicts
       WHERE roster_month_id = ${monthId} AND resolved = false AND date IS NOT NULL
+        AND (
+          ${isManager}
+          OR employee_id IN (
+            SELECT scoped_employee.id
+            FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+          OR brand_process_id IN (
+            SELECT scoped_assignment.brand_process_id
+            FROM assignments scoped_assignment
+            JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        )
       GROUP BY date, severity
       ORDER BY date ASC;
     `;
@@ -193,6 +276,15 @@ export async function GET(
         weekday,
         COUNT(*) as count
       FROM weekly_offs
+      JOIN employees scoped_employee ON scoped_employee.id = weekly_offs.employee_id
+      WHERE (
+        ${isManager}
+        OR EXISTS (
+          SELECT 1 FROM pods scoped_pod
+          WHERE scoped_pod.id = scoped_employee.pod_id
+            AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+        )
+      )
       GROUP BY weekday
       ORDER BY weekday ASC;
     `;
@@ -211,7 +303,16 @@ export async function GET(
         COUNT(*) FILTER (WHERE rd.status = 'leave') as total_leaves,
         COUNT(DISTINCT rd.employee_id) as active_employees
       FROM roster_days rd
-      WHERE rd.roster_month_id = ${monthId};
+      WHERE rd.roster_month_id = ${monthId}
+        AND (
+          ${isManager}
+          OR rd.employee_id IN (
+            SELECT scoped_employee.id
+            FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        );
     `;
 
     const conflictSummary = await sql`
@@ -219,7 +320,23 @@ export async function GET(
         COUNT(*) FILTER (WHERE severity = 'blocking') as blocking,
         COUNT(*) FILTER (WHERE severity = 'warning') as warnings
       FROM conflicts
-      WHERE roster_month_id = ${monthId} AND resolved = false;
+      WHERE roster_month_id = ${monthId} AND resolved = false
+        AND (
+          ${isManager}
+          OR employee_id IN (
+            SELECT scoped_employee.id
+            FROM employees scoped_employee
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+          OR brand_process_id IN (
+            SELECT scoped_assignment.brand_process_id
+            FROM assignments scoped_assignment
+            JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+            WHERE scoped_pod.lead_employee_id = ${user?.employeeId || null}
+          )
+        );
     `;
 
     return NextResponse.json({
@@ -242,6 +359,6 @@ export async function GET(
     });
   } catch (error: any) {
     console.error("Analytics API error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load analytics." }, { status: 500 });
   }
 }

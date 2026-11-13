@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-helpers";
-import { neon } from "@neondatabase/serverless";
+import { beginTransaction, TransactionalSql } from "@/lib/db/transaction";
 import "@/lib/db/dns-patch";
 
 export const dynamic = "force-dynamic";
@@ -13,22 +13,25 @@ export async function POST(
   if (errorResponse) return errorResponse;
 
   const month = params.month;
-  const sql = neon(process.env.DATABASE_URL!);
+  let transaction: TransactionalSql | undefined;
 
   try {
+    transaction = await beginTransaction(process.env.DATABASE_URL!);
     const monthId = `roster-${month}`;
-    const monthRecord = await sql`SELECT * FROM roster_months WHERE id = ${monthId} LIMIT 1;`;
+    const monthRecord = await transaction`SELECT * FROM roster_months WHERE id = ${monthId} FOR UPDATE;`;
     if (!monthRecord || monthRecord.length === 0) {
+      await transaction.rollback();
       return NextResponse.json({ error: "Roster month not found" }, { status: 404 });
     }
 
     // Check for unresolved blocking conflicts
-    const blockingConflicts = await sql`
+    const blockingConflicts = await transaction`
       SELECT * FROM conflicts
       WHERE roster_month_id = ${monthId} AND severity = 'blocking' AND resolved = false;
     `;
 
     if (blockingConflicts.length > 0) {
+      await transaction.rollback();
       return NextResponse.json(
         {
           error: "PUBLISH_BLOCKED",
@@ -40,20 +43,20 @@ export async function POST(
     }
 
     // Publish and pin all days
-    await sql`
+    await transaction`
       UPDATE roster_months
       SET status = 'published', published_at = now(), updated_at = now()
       WHERE id = ${monthId};
     `;
 
-    await sql`
+    await transaction`
       UPDATE roster_days
       SET pinned = true, updated_at = now()
       WHERE roster_month_id = ${monthId};
     `;
 
     // Audit log
-    await sql`
+    await transaction`
       INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, before, after, created_at, updated_at)
       VALUES (
         ${`audit-${Date.now()}`},
@@ -68,14 +71,25 @@ export async function POST(
       );
     `;
 
+    await transaction.commit();
+
     return NextResponse.json({
       success: true,
       message: `Roster for ${month} published successfully and all shifts pinned.`,
       status: "published",
     });
   } catch (error: any) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Roster publish rollback failed:", rollbackError);
+      }
+    }
     console.error("Publish error:", error);
-    return NextResponse.json({ error: error.message || "Failed to publish roster" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to publish roster." }, { status: 500 });
+  } finally {
+    if (transaction) await transaction.close();
   }
 }
 

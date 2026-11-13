@@ -94,7 +94,12 @@ export async function GET(
     return NextResponse.json({ error: "Invalid master data entity" }, { status: 400 });
   }
 
+  if (user?.role === "pod_lead" && !user.employeeId) {
+    return NextResponse.json({ error: "Pod lead account is not linked to an employee." }, { status: 403 });
+  }
+
   const sql = neon(process.env.DATABASE_URL!);
+  const isManager = user?.role === "manager";
 
   try {
     let rows: any[] = [];
@@ -105,6 +110,14 @@ export async function GET(
             EXISTS (SELECT 1 FROM users u WHERE u.employee_id = e.id) AS has_login
           FROM employees e
           LEFT JOIN pods p ON e.pod_id = p.id
+          WHERE (
+            ${isManager}
+            OR EXISTS (
+              SELECT 1 FROM pods scoped_pod
+              WHERE scoped_pod.id = e.pod_id
+                AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+            )
+          )
           ORDER BY e.name ASC;
         `;
         break;
@@ -113,6 +126,7 @@ export async function GET(
           SELECT p.*, e.name as lead_name
           FROM pods p
           LEFT JOIN employees e ON p.lead_employee_id = e.id
+          WHERE (${isManager} OR p.lead_employee_id = ${user?.employeeId || null})
           ORDER BY p.name ASC;
         `;
         break;
@@ -128,6 +142,17 @@ export async function GET(
           FROM brand_processes bp
           JOIN brands b ON bp.brand_id = b.id
           JOIN processes p ON bp.process_id = p.id
+          WHERE (
+            ${isManager}
+            OR EXISTS (
+              SELECT 1
+              FROM assignments scoped_assignment
+              JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+              JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+              WHERE scoped_assignment.brand_process_id = bp.id
+                AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+            )
+          )
           ORDER BY b.name ASC, p.code ASC;
         `;
         break;
@@ -139,6 +164,14 @@ export async function GET(
           JOIN brand_processes bp ON a.brand_process_id = bp.id
           JOIN brands b ON bp.brand_id = b.id
           JOIN processes p ON bp.process_id = p.id
+          WHERE (
+            ${isManager}
+            OR EXISTS (
+              SELECT 1 FROM pods scoped_pod
+              WHERE scoped_pod.id = e.pod_id
+                AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+            )
+          )
           ORDER BY e.name ASC;
         `;
         break;
@@ -147,6 +180,14 @@ export async function GET(
           SELECT w.*, e.name as employee_name
           FROM weekly_offs w
           JOIN employees e ON w.employee_id = e.id
+          WHERE (
+            ${isManager}
+            OR EXISTS (
+              SELECT 1 FROM pods scoped_pod
+              WHERE scoped_pod.id = e.pod_id
+                AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
+            )
+          )
           ORDER BY e.name ASC;
         `;
         break;
@@ -158,7 +199,7 @@ export async function GET(
     return NextResponse.json({ data: rows });
   } catch (error: any) {
     console.error(`Fetch ${entity} error:`, error);
-    return NextResponse.json({ error: error.message || "Failed to fetch data" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to fetch master data." }, { status: 500 });
   }
 }
 
@@ -427,7 +468,15 @@ export async function PUT(
           if (!priorLead.length) return NextResponse.json({ error: "Pod not found." }, { status: 404 });
         await sql`UPDATE pods SET name = ${body.name}, lead_employee_id = ${body.leadEmployeeId || null}, updated_at = now() WHERE id = ${id};`;
           if (priorLead[0].lead_employee_id && priorLead[0].lead_employee_id !== body.leadEmployeeId) {
-            await sql`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${priorLead[0].lead_employee_id} AND role = 'pod_lead';`;
+            const otherLedPods = await sql`
+              SELECT id FROM pods
+              WHERE lead_employee_id = ${priorLead[0].lead_employee_id}
+                AND id != ${id}
+              LIMIT 1;
+            `;
+            if (otherLedPods.length === 0) {
+              await sql`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${priorLead[0].lead_employee_id} AND role = 'pod_lead';`;
+            }
           }
           if (body.leadEmployeeId) {
             await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;

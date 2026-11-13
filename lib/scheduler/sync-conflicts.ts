@@ -158,18 +158,42 @@ export async function syncRosterConflicts(sql: any, month: string): Promise<Conf
   );
   const allConflicts = [...remainingCapacityConflicts, ...postSolveConflicts];
 
-  // Replace the conflict snapshot atomically so dashboards never read a
-  // partially refreshed set if an insert fails.
+  // Reconcile the computed snapshot atomically. Existing conflict IDs retain
+  // their manager resolution state; only newly-created conflicts start open.
+  const conflictRows = allConflicts.map((conflict) => ({
+    conflict,
+    id: `cf-${monthId}-${conflict.id}`,
+  }));
+
   await sql.transaction((tx: any) => {
+    const ids = conflictRows.map((row) => row.id);
     const statements = [
-      tx`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`,
-      ...allConflicts.map((c) => {
-        const cId = `cf-${monthId}-${c.id}`;
-        return tx`
-          INSERT INTO conflicts (id, roster_month_id, type, severity, brand_process_id, employee_id, date, message, suggested_fix, resolved, created_at, updated_at)
-          VALUES (${cId}, ${monthId}, ${c.type}, ${c.severity}, ${c.brandProcessId || null}, ${c.employeeId || null}, ${c.date || null}, ${c.message}, ${c.suggestedFix || null}, false, now(), now());
-        `;
-      }),
+      ids.length
+        ? tx`DELETE FROM conflicts
+            WHERE roster_month_id = ${monthId}
+              AND NOT (id = ANY(${ids}::text[]));`
+        : tx`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`,
+      ...conflictRows.map(({ conflict, id }) => tx`
+        INSERT INTO conflicts (
+          id, roster_month_id, type, severity, brand_process_id, employee_id,
+          date, message, suggested_fix, resolved, created_at, updated_at
+        )
+        VALUES (
+          ${id}, ${monthId}, ${conflict.type}, ${conflict.severity},
+          ${conflict.brandProcessId || null}, ${conflict.employeeId || null},
+          ${conflict.date || null}, ${conflict.message}, ${conflict.suggestedFix || null},
+          false, now(), now()
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          type = EXCLUDED.type,
+          severity = EXCLUDED.severity,
+          brand_process_id = EXCLUDED.brand_process_id,
+          employee_id = EXCLUDED.employee_id,
+          date = EXCLUDED.date,
+          message = EXCLUDED.message,
+          suggested_fix = EXCLUDED.suggested_fix,
+          updated_at = now();
+      `),
     ];
     return statements;
   });

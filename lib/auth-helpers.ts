@@ -1,5 +1,7 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
+import { neon } from "@neondatabase/serverless";
+import "@/lib/db/dns-patch";
 
 export interface AuthenticatedUser {
   id: string;
@@ -27,22 +29,52 @@ export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | 
     };
   }
 
-  const user: AuthenticatedUser = {
-    id: session.user.id,
-    email: session.user.email || "",
-    role: (session.user as any).role || "employee",
-    employeeId: (session.user as any).employeeId || null,
-  };
+  // JWT claims can outlive employee deactivation or role changes. Re-read the
+  // account for each protected API request so current database permissions win.
+  try {
+    const sql = neon(process.env.DATABASE_URL!);
+    const rows = await sql`
+      SELECT u.id, u.email, u.role, u.employee_id, e.active AS employee_active
+      FROM users u
+      LEFT JOIN employees e ON e.id = u.employee_id
+      WHERE u.id = ${session.user.id}
+      LIMIT 1;
+    `;
+    const account = rows[0];
+    if (!account || (account.employee_id && account.employee_active !== true)) {
+      return {
+        errorResponse: NextResponse.json(
+          { error: "Your account is inactive or no longer available. Please sign in again." },
+          { status: 401 }
+        ),
+      };
+    }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    const user: AuthenticatedUser = {
+      id: account.id,
+      email: account.email || "",
+      role: account.role,
+      employeeId: account.employee_id || null,
+    };
+
+    if (allowedRoles && !allowedRoles.includes(user.role)) {
+      return {
+        errorResponse: NextResponse.json(
+          { error: `Forbidden: role '${user.role}' lacks permission for this action` },
+          { status: 403 }
+        ),
+      };
+    }
+
+    return { user };
+  } catch (error) {
+    console.error("Authentication revalidation failed:", error);
     return {
       errorResponse: NextResponse.json(
-        { error: `Forbidden: role '${user.role}' lacks permission for this action` },
-        { status: 403 }
+        { error: "Unable to verify your account. Please try again." },
+        { status: 503 }
       ),
     };
   }
-
-  return { user };
 }
 
