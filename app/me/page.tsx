@@ -57,6 +57,7 @@ interface ApiScheduleDay {
   notes: string | null;
   holidayName: string | null;
   pendingLeave: boolean;
+  assignments?: Array<{ brandName: string | null; brandCode: string | null; processCode: string | null; notes: string | null }>;
 }
 
 interface ApiScheduleResponse {
