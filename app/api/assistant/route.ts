@@ -21,28 +21,9 @@ import {
   CompOffItem,
 } from "@/lib/scheduler/types";
 import { formatDateOnly } from "@/lib/date-utils";
+import { consumeRateLimit } from "@/lib/security/rate-limit";
 
 export const dynamic = "force-dynamic";
-
-// In-memory rate limiting: 45 requests per minute per user
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-
-function checkRateLimit(userId: string): boolean {
-  const now = Date.now();
-  const userRate = rateLimitMap.get(userId);
-
-  if (!userRate || now > userRate.resetTime) {
-    rateLimitMap.set(userId, { count: 1, resetTime: now + 60000 });
-    return true;
-  }
-
-  if (userRate.count >= 45) {
-    return false;
-  }
-
-  userRate.count++;
-  return true;
-}
 
 function isValidDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -463,6 +444,7 @@ async function executeTool(
           COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) AS min_headcount_weekday,
           COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) AS min_headcount_sunday,
           COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) AS min_headcount_holiday,
+          bp.custom_schedule_config,
           b.name as brand_name, p.code as process_code
         FROM brand_processes bp
         JOIN brands b ON bp.brand_id = b.id
@@ -507,10 +489,14 @@ async function executeTool(
             : isSunday
               ? rule.min_headcount_sunday
               : rule.min_headcount_weekday;
+          const customConfig = rule.custom_schedule_config || {};
+          const customWeekdays = Array.isArray(customConfig.activeWeekdays) ? customConfig.activeWeekdays : [1, 2, 3, 4, 5];
+          const customSkipsHolidays = customConfig.noHolidays !== false;
           const requiresCoverage =
             rule.operating_calendar === "all_365" ||
             (!isHoliday && rule.operating_calendar === "daily_no_holidays") ||
-            (!isHoliday && !isSunday && rule.operating_calendar === "mon_sat_no_holidays");
+            (!isHoliday && !isSunday && rule.operating_calendar === "mon_sat_no_holidays") ||
+            (rule.operating_calendar === "custom" && customWeekdays.includes(weekday) && !(isHoliday && customSkipsHolidays));
           if (!requiresCoverage || required <= 0) continue;
           expectedCoverageSlots += required;
           const actual = workingDays.filter((shift: any) =>
@@ -1338,6 +1324,7 @@ async function executeTool(
                COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) AS min_headcount_weekday,
                COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) AS min_headcount_sunday,
                COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) AS min_headcount_holiday,
+               bp.custom_schedule_config,
                b.name as brand_name, p.code as process_code
         FROM assignments a
         JOIN brand_processes bp ON a.brand_process_id = bp.id
@@ -1378,10 +1365,14 @@ async function executeTool(
               : bp.min_headcount_weekday;
 
           // Check if operating calendar requires coverage on this day
+          const customConfig = bp.custom_schedule_config || {};
+          const customWeekdays = Array.isArray(customConfig.activeWeekdays) ? customConfig.activeWeekdays : [1, 2, 3, 4, 5];
+          const customSkipsHolidays = customConfig.noHolidays !== false;
           const requiresCoverage =
             bp.operating_calendar === "all_365" ||
             (!isHoliday && bp.operating_calendar === "daily_no_holidays") ||
-            (!isHoliday && !isSunday && bp.operating_calendar === "mon_sat_no_holidays");
+            (!isHoliday && !isSunday && bp.operating_calendar === "mon_sat_no_holidays") ||
+            (bp.operating_calendar === "custom" && customWeekdays.includes(dObj.getUTCDay()) && !(isHoliday && customSkipsHolidays));
 
           if (requiresCoverage && required > 0) {
             // Count other staff working on that date for this brand_process
@@ -1834,6 +1825,7 @@ async function executeTool(
         type: "manager_message",
         date,
         metadata: { source: "ai_assistant" },
+        eventId: `manager-message:${randomUUID()}`,
         notifyPodLead: true,
       });
       const podLeadNotified = Boolean(podLeadNotificationId);
@@ -2090,7 +2082,9 @@ export async function POST(req: NextRequest) {
   const { user, errorResponse } = await requireAuth();
   if (errorResponse) return errorResponse;
 
-  if (!checkRateLimit(user!.id)) {
+  const sql = neon(process.env.DATABASE_URL!);
+  const rate = await consumeRateLimit(sql, `assistant:${user!.id}`, 45, 60);
+  if (!rate.allowed) {
     return NextResponse.json(
       { error: "Rate limit exceeded. You can send up to 45 queries per minute." },
       { status: 429 }
