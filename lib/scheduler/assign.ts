@@ -330,15 +330,20 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
   for (const emp of input.employees) {
     if (!emp.active) continue;
 
-    const woRule = input.weeklyOffs.find(
-      (w) =>
-        w.employeeId === emp.id &&
-        w.effectiveFrom <= dates[dates.length - 1] &&
-        (!w.effectiveTo || w.effectiveTo >= dates[0])
-    );
-    const preferredDow = woRule ? woRule.weekday : 0; // 0 = Sunday default
-
     for (const weekDates of calendarWeeks) {
+      // Resolve the effective weekly-off rule against each date. This supports
+      // rule changes within a month (including a change during this calendar week).
+      const preferredDate = weekDates.find((date) => {
+        const rule = input.weeklyOffs.find(
+          (w) =>
+            w.employeeId === emp.id &&
+            w.effectiveFrom <= date &&
+            (!w.effectiveTo || w.effectiveTo >= date)
+        );
+        return getDayOfWeek(date) === (rule ? rule.weekday : 0);
+      });
+      const preferredDow = preferredDate ? getDayOfWeek(preferredDate) : 0;
+
       // Check if employee already has an assignment in this week that counts as off (pinned weekly_off, leave, comp-off)
       const weekKeys = weekDates.map((d) => `${d}_${emp.id}`);
       const hasExistingOff = weekDates.some((d) => {
@@ -352,7 +357,6 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
       }
 
       // Check if preferred day in this week is available (not working and not pinned)
-      const preferredDate = weekDates.find((d) => getDayOfWeek(d) === preferredDow);
       const isPreferredWorking = preferredDate && employeeDailyWorking.has(`${preferredDate}_${emp.id}`) && employeeDailyWorking.get(`${preferredDate}_${emp.id}`)!.length > 0;
 
       let chosenDate: string | null = null;
