@@ -1,6 +1,4 @@
 # 🌟 Smart Roster Management System
-### Datastraw Tech Internship Assessment — Complete Solution
-
 > **An enterprise-grade, deterministic roster planning and operations copilot built for multi-brand D2C operations companies.**
 > Handles complex multi-brand scheduling, single-resource dependencies, dynamic leave replanning, strict IDOR notification isolation, and AI-assisted operations management.
 
