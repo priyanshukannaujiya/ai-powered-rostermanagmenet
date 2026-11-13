@@ -207,8 +207,8 @@ export async function PUT(
         'MANUAL_ROSTER_EDIT',
         'roster_days',
         ${rdId},
-        ${JSON.stringify(beforeState)},
-         ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, leaveOverride: Boolean(isOverride), overrideReason })},
+        ${JSON.stringify(beforeState)}::jsonb,
+         ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, leaveOverride: Boolean(isOverride), overrideReason })}::jsonb,
         now(),
         now()
       );
