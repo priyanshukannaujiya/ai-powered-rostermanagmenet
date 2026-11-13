@@ -108,6 +108,26 @@ export async function POST(req: NextRequest) {
       targetEmployeeId = parsed.data.employeeId;
     }
 
+    if (!targetEmployeeId && user!.email) {
+      const normalizedEmail = user!.email.trim().toLowerCase();
+      const matched = await sql`
+        SELECT e.id
+        FROM employees e
+        WHERE LOWER(TRIM(e.email)) = ${normalizedEmail}
+          AND e.active = true
+          AND NOT EXISTS (
+            SELECT 1 FROM users u2 WHERE u2.employee_id = e.id AND u2.id != ${user!.id}
+          )
+        LIMIT 2;
+      `;
+      if (matched.length === 1) {
+        targetEmployeeId = matched[0].id;
+        await sql`
+          UPDATE users SET employee_id = ${targetEmployeeId}, updated_at = now() WHERE id = ${user!.id};
+        `;
+      }
+    }
+
     if (!targetEmployeeId) {
       return NextResponse.json({ error: "No associated employee account found" }, { status: 400 });
     }

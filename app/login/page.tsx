@@ -22,12 +22,23 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
+  const urlError = searchParams.get("error");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  React.useEffect(() => {
+    if (urlError === "MissingCSRF") {
+      setError("Your session security verification expired. Please refresh the page and try again.");
+    } else if (urlError === "CredentialsSignin") {
+      setError("Invalid email or password. Please verify your credentials.");
+    } else if (urlError) {
+      setError("Authentication error. Please try signing in again.");
+    }
+  }, [urlError]);
 
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -42,7 +53,11 @@ function LoginForm() {
       });
 
       if (!result || result.error || !result.ok) {
-        setError("Invalid email or password. Please verify your credentials.");
+        if (result?.error === "MissingCSRF") {
+          setError("Your session security verification expired. Please refresh the page and try again.");
+        } else {
+          setError("Invalid email or password. Please verify your credentials.");
+        }
         setLoading(false);
         return;
       }

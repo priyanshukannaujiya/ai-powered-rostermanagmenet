@@ -100,17 +100,36 @@ export async function PUT(
         JOIN brands b ON b.id = bp.brand_id
         WHERE a.employee_id = ${employeeId}
           AND a.brand_process_id = ${resolvedBrandProcessId}
-          AND a.active = true
-          AND bp.active = true
-          AND b.active = true
-          AND a.start_date <= ${date}
-          AND (a.end_date IS NULL OR a.end_date >= ${date})
+          AND a.active IS NOT FALSE
+          AND bp.active IS NOT FALSE
+          AND b.active IS NOT FALSE
+          AND a.start_date <= ${date}::date
+          AND (a.end_date IS NULL OR a.end_date >= ${date}::date)
         LIMIT 1;
       `;
-      if (!eligibleAssignment.length) {
-        return NextResponse.json({
-          error: "The employee is not actively assigned to this brand/process on the selected date.",
-        }, { status: 422 });
+
+      const existingRosterDay = await sql`
+        SELECT id FROM roster_days
+        WHERE roster_month_id = ${monthId}
+          AND employee_id = ${employeeId}
+          AND date = ${date}::date
+          AND brand_process_id = ${resolvedBrandProcessId}
+        LIMIT 1;
+      `;
+
+      if (!eligibleAssignment.length && !existingRosterDay.length) {
+        if (!isOverride) {
+          return NextResponse.json({
+            error: "SKILL_CONFLICT",
+            message: "The employee is not actively assigned to this brand/process on the selected date. A manager override justification is required.",
+            requiresOverride: true,
+          }, { status: 422 });
+        }
+        if (user?.role !== "manager") {
+          return NextResponse.json({
+            error: "Only managers can override brand/process assignment constraints.",
+          }, { status: 403 });
+        }
       }
     }
 
@@ -119,7 +138,7 @@ export async function PUT(
     if (status === "working") {
       const leaves = await sql`
         SELECT * FROM leaves
-        WHERE employee_id = ${employeeId} AND status = 'approved' AND start_date <= ${date} AND end_date >= ${date};
+        WHERE employee_id = ${employeeId} AND status = 'approved' AND start_date <= ${date}::date AND end_date >= ${date}::date;
       `;
       if (leaves.length > 0 && !isOverride) {
         return NextResponse.json(
@@ -136,43 +155,42 @@ export async function PUT(
     // Snapshot the previous state for the audit trail and notification dedupe.
     const existing = await sql`
       SELECT * FROM roster_days
-      WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date}
+      WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date}::date
       ORDER BY created_at ASC;
     `;
     const beforeState = existing;
 
-    // Preserve other working process rows for the same employee/date. A
-    // non-working status intentionally replaces the whole day's assignments.
-    if (status === "working") {
-      await sql`
-        DELETE FROM roster_days
-        WHERE roster_month_id = ${monthId}
-          AND employee_id = ${employeeId}
-          AND date = ${date}
-          AND (status <> 'working' OR brand_process_id = ${resolvedBrandProcessId});
-      `;
-    } else {
-      await sql`
-        DELETE FROM roster_days
-        WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date};
-      `;
-    }
     const rdId = `rd-${monthId}-${employeeId}-${date}-${resolvedBrandProcessId || status}`;
-    await sql`
+
+    // Execute deletions, insert, version update, and audit log atomically
+    const deleteQuery = status === "working"
+      ? sql`
+          DELETE FROM roster_days
+          WHERE roster_month_id = ${monthId}
+            AND employee_id = ${employeeId}
+            AND date = ${date}::date
+            AND (status <> 'working' OR brand_process_id = ${resolvedBrandProcessId});
+        `
+      : sql`
+          DELETE FROM roster_days
+          WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date}::date;
+        `;
+
+    const insertQuery = sql`
       INSERT INTO roster_days (
         id, roster_month_id, employee_id, date, status, brand_process_id, pinned, leave_override, notes, created_at, updated_at
       )
       VALUES (
-        ${rdId}, ${monthId}, ${employeeId}, ${date}, ${status as any}, ${resolvedBrandProcessId},
-        true, ${Boolean(isOverride)}, ${overrideReason || "Manual edit"}, now(), now()
+        ${rdId}, ${monthId}, ${employeeId}, ${date}::date, ${status as any}, ${resolvedBrandProcessId},
+        true, ${Boolean(isOverride)}, ${overrideReason || (isOverride ? "Manager manual override" : "Manual edit")}, now(), now()
       );
     `;
 
-    // Advance the roster version so an in-flight generation based on an older
-    // snapshot fails its compare-and-swap instead of overwriting this manual edit.
-    await sql`
+    const updateMonthQuery = sql`
       UPDATE roster_months SET updated_at = now() WHERE id = ${monthId};
     `;
+
+    await sql.transaction([deleteQuery, insertQuery, updateMonthQuery]);
 
     // Re-synchronize conflict records so the roster and dashboard immediately reflect live staffing status
     try {
@@ -223,7 +241,6 @@ export async function PUT(
       console.error("Roster cell saved, but audit logging failed:", auditError);
       auditWarning = "The shift was saved, but its audit record could not be written.";
     }
-
     // Notify ONLY the employee whose own cell changed, and only when the
     // assignment genuinely changed (repeated saves of the same shift stay quiet).
     const isWorkingAssignment = status === "working" && Boolean(resolvedBrandProcessId);

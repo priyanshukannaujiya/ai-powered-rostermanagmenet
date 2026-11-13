@@ -110,73 +110,77 @@ export async function GET(
       date: c.date ? formatDateOnly(c.date) : null,
     }));
 
-    // 4. Fetch metadata for UI filters and dropdowns
-    const employees = await sql`
-      SELECT e.*, p.name as pod_name
-      FROM employees e
-      LEFT JOIN pods p ON e.pod_id = p.id
-      WHERE ${user!.role} = 'manager'
-        OR p.lead_employee_id = ${user!.employeeId || null}
-      ORDER BY e.name ASC;
-    `;
-
-    const pods = await sql`
-      SELECT * FROM pods
-      WHERE ${user!.role} = 'manager'
-        OR lead_employee_id = ${user!.employeeId || null}
-      ORDER BY name ASC;
-    `;
-    const brands = await sql`
-      SELECT DISTINCT b.* FROM brands b
-      WHERE b.active = true
-        AND (
-          ${user!.role} = 'manager'
+    // 4. Fetch metadata for UI filters and dropdowns concurrently
+    const [employees, pods, brands, processes, brandProcesses] = await Promise.all([
+      sql`
+        SELECT e.*, p.name as pod_name
+        FROM employees e
+        LEFT JOIN pods p ON e.pod_id = p.id
+        WHERE e.active = true
+          AND (
+            ${user!.role} = 'manager'
+            OR p.lead_employee_id = ${user!.employeeId || null}
+          )
+        ORDER BY e.name ASC;
+      `,
+      sql`
+        SELECT * FROM pods
+        WHERE ${user!.role} = 'manager'
+          OR lead_employee_id = ${user!.employeeId || null}
+        ORDER BY name ASC;
+      `,
+      sql`
+        SELECT DISTINCT b.* FROM brands b
+        WHERE b.active = true
+          AND (
+            ${user!.role} = 'manager'
+            OR EXISTS (
+              SELECT 1 FROM brand_processes bp
+              JOIN assignments scoped_assignment ON scoped_assignment.brand_process_id = bp.id AND scoped_assignment.active = true
+              JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+              JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+              WHERE bp.brand_id = b.id AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+            )
+          )
+        ORDER BY b.name ASC;
+      `,
+      sql`
+        SELECT DISTINCT p.* FROM processes p
+        WHERE ${user!.role} = 'manager'
           OR EXISTS (
             SELECT 1 FROM brand_processes bp
             JOIN assignments scoped_assignment ON scoped_assignment.brand_process_id = bp.id AND scoped_assignment.active = true
             JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
             JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-            WHERE bp.brand_id = b.id AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+            WHERE bp.process_id = p.id AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
           )
-        )
-      ORDER BY b.name ASC;
-    `;
-    const processes = await sql`
-      SELECT DISTINCT p.* FROM processes p
-      WHERE ${user!.role} = 'manager'
-        OR EXISTS (
-          SELECT 1 FROM brand_processes bp
-          JOIN assignments scoped_assignment ON scoped_assignment.brand_process_id = bp.id AND scoped_assignment.active = true
-          JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
-          JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-          WHERE bp.process_id = p.id AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
-        )
-      ORDER BY p.code ASC;
-    `;
-    const brandProcesses = await sql`
-      SELECT bp.*, b.name as brand_name, p.code as process_code,
-        COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
-        COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as month_min_headcount_weekday,
-        COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as month_min_headcount_sunday,
-        COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as month_min_headcount_holiday
-      FROM brand_processes bp
-      JOIN brands b ON bp.brand_id = b.id
-      JOIN processes p ON bp.process_id = p.id
-      LEFT JOIN roster_month_rules mr
-        ON mr.brand_process_id = bp.id AND mr.month = ${month}
-      WHERE bp.active = true AND b.active = true
-        AND (
-          ${user!.role} = 'manager'
-          OR EXISTS (
-            SELECT 1 FROM assignments scoped_assignment
-            JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
-            JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
-            WHERE scoped_assignment.brand_process_id = bp.id
-              AND scoped_assignment.active = true
-              AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
-          )
-        );
-    `;
+        ORDER BY p.code ASC;
+      `,
+      sql`
+        SELECT bp.*, b.name as brand_name, p.code as process_code,
+          COALESCE(mr.operating_calendar, bp.operating_calendar) as month_operating_calendar,
+          COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as month_min_headcount_weekday,
+          COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as month_min_headcount_sunday,
+          COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as month_min_headcount_holiday
+        FROM brand_processes bp
+        JOIN brands b ON bp.brand_id = b.id
+        JOIN processes p ON bp.process_id = p.id
+        LEFT JOIN roster_month_rules mr
+          ON mr.brand_process_id = bp.id AND mr.month = ${month}
+        WHERE bp.active = true AND b.active = true
+          AND (
+            ${user!.role} = 'manager'
+            OR EXISTS (
+              SELECT 1 FROM assignments scoped_assignment
+              JOIN employees scoped_employee ON scoped_employee.id = scoped_assignment.employee_id
+              JOIN pods scoped_pod ON scoped_pod.id = scoped_employee.pod_id
+              WHERE scoped_assignment.brand_process_id = bp.id
+                AND scoped_assignment.active = true
+                AND scoped_pod.lead_employee_id = ${user!.employeeId || null}
+            )
+          );
+      `,
+    ]);
     const [yStr, mStr] = month.split("-");
     const lastDayOfMonth = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0).getDate();
     const startDateStr = `${month}-01`;

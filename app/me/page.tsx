@@ -318,6 +318,26 @@ export default function EmployeePortalPage() {
         </div>
       )}
 
+      {/* Account Linking / Schedule Error Alert */}
+      {(scheduleData?.error || scheduleError) && (
+        <div className="p-5 rounded-3xl bg-amber-50 border border-amber-200 text-amber-900 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <AlertCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                Employee Profile Notice
+              </h2>
+              <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                {scheduleData?.error || "Unable to load employee schedule. No active employee record is linked to your user account."}
+                {" "}Please contact your operations manager to verify your employee profile association.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Welcome & KPI Hero Card */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-card p-6 sm:p-7 relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">

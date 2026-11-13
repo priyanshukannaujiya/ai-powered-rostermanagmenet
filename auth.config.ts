@@ -3,6 +3,7 @@ import type { NextAuthConfig } from "next-auth";
 export const authConfig: NextAuthConfig = {
   secret: process.env.AUTH_SECRET,
   trustHost: true,
+  useSecureCookies: process.env.NODE_ENV === "production",
   pages: {
     signIn: "/login",
   },
@@ -18,12 +19,26 @@ export const authConfig: NextAuthConfig = {
 
       const isManagerRoute = nextUrl.pathname.startsWith("/manager");
       const isEmployeeRoute = nextUrl.pathname.startsWith("/me");
+      const isLoginRoute = nextUrl.pathname === "/login";
 
-      if (isManagerRoute) {
-        if (!isLoggedIn) return false;
-        if (!role || (role !== "manager" && role !== "pod_lead")) return false;
+      // If already logged in and visiting /login: redirect to appropriate portal
+      if (isLoginRoute && isLoggedIn) {
+        if (role === "manager" || role === "pod_lead") {
+          return Response.redirect(new URL("/manager", nextUrl));
+        }
+        return Response.redirect(new URL("/me", nextUrl));
       }
 
+      // Manager / Pod Lead portal
+      if (isManagerRoute) {
+        if (!isLoggedIn) return false;
+        if (role !== "manager" && role !== "pod_lead") {
+          // Employee trying to access manager route: redirect to /me instead of login redirect loop
+          return Response.redirect(new URL("/me", nextUrl));
+        }
+      }
+
+      // Employee portal
       if (isEmployeeRoute) {
         if (!isLoggedIn) return false;
       }

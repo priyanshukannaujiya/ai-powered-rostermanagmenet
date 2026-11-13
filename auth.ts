@@ -69,6 +69,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           console.warn(`[AUTH_DIAGNOSTIC] Login failed: Password mismatch for user: ${email}`);
           return null;
         }
+
         // Repair legacy employee/Pod Lead links at sign-in, not on every API call.
         // Only link when exactly one active employee has this exact normalized email
         // and that employee is not already linked to another login account.
@@ -106,14 +107,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           }
         }
 
+        const employeeId = user.employee_id;
         await clearRateLimit(sql, loginKey);
-        console.info(`[AUTH_DIAGNOSTIC] Login successful for user: ${user.email} (role: ${user.role}, employeeId: ${user.employee_id})`);
+        console.info(`[AUTH_DIAGNOSTIC] Login successful for user: ${user.email} (role: ${user.role}, employeeId: ${employeeId})`);
 
         return {
           id: user.id,
           email: user.email,
           role: user.role,
-          employeeId: user.employee_id,
+          employeeId,
         };
       },
     }),
