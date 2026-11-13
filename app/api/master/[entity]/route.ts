@@ -8,6 +8,18 @@ import { beginTransaction } from "@/lib/db/transaction";
 
 export const dynamic = "force-dynamic";
 
+
+async function deactivateEmployeeAndClearLeadership(connectionString: string, id: string) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    await tx`UPDATE employees SET active = false, updated_at = now() WHERE id = ${id};`;
+    await tx`UPDATE pods SET lead_employee_id = NULL, updated_at = now() WHERE lead_employee_id = ${id};`;
+    await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${id} AND role = 'pod_lead';`;
+    await tx.commit();
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
 async function createPodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
   const tx = await beginTransaction(connectionString);
   try {
@@ -390,7 +402,7 @@ export async function DELETE(
   try {
     switch (entity) {
       case "employees":
-        await sql`UPDATE employees SET active = false, updated_at = now() WHERE id = ${id};`;
+        await deactivateEmployeeAndClearLeadership(process.env.DATABASE_URL!, id);
         break;
       case "brand_processes":
         await sql`UPDATE brand_processes SET active = false, updated_at = now() WHERE id = ${id};`;
