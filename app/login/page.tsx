@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, Suspense } from "react";
-import { signIn } from "next-auth/react";
+import { getSession, signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Calendar,
@@ -37,17 +37,44 @@ function LoginForm() {
     try {
       const result = await signIn("credentials", {
         redirect: false,
-        email,
+        email: email.trim(),
         password,
       });
 
-      if (result?.error) {
+      if (!result || result.error || !result.ok) {
         setError("Invalid email or password. Please verify your credentials.");
         setLoading(false);
-      } else {
-        router.push(callbackUrl);
-        router.refresh();
+        return;
       }
+
+      // Read the newly issued session before navigating. This avoids routing
+      // to "/" while the client still has a stale session snapshot.
+      const session = await getSession();
+      const role = (session?.user as any)?.role as string | undefined;
+      if (!role) {
+        setError("Sign-in was accepted, but your session could not be loaded. Please refresh and try again.");
+        setLoading(false);
+        return;
+      }
+
+      const defaultDestination =
+        role === "manager" || role === "pod_lead" ? "/manager" : "/me";
+      const requestedDestination =
+        callbackUrl.startsWith("/") && !callbackUrl.startsWith("//")
+          ? callbackUrl
+          : defaultDestination;
+      const isManagerRole = role === "manager" || role === "pod_lead";
+      const destinationMatchesRole =
+        requestedDestination === "/" ||
+        (isManagerRole && requestedDestination.startsWith("/manager")) ||
+        (!isManagerRole && requestedDestination.startsWith("/me"));
+
+      router.replace(
+        requestedDestination === "/" || !destinationMatchesRole
+          ? defaultDestination
+          : requestedDestination
+      );
+      router.refresh();
     } catch (err: any) {
       setError(err?.message || "An unexpected error occurred during login.");
       setLoading(false);
