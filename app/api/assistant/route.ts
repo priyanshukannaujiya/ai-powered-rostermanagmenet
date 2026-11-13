@@ -2118,7 +2118,6 @@ export async function POST(req: NextRequest) {
   const provider = detectProvider(`${groqKey || ""}${anthropicKey || ""}`);
   const apiKey = provider === "groq" ? groqKey : anthropicKey;
 
-  const sql = neon(process.env.DATABASE_URL!);
   const latestImportRec = await sql`SELECT id, filename, uploaded_at, status FROM imports WHERE status = 'committed' ORDER BY uploaded_at DESC LIMIT 1;`;
   const activeImportId = latestImportRec[0]?.id || null;
 
