@@ -399,7 +399,24 @@ async function executeTool(
 
   const sql = neon(process.env.DATABASE_URL!);
   const month = args.month || new Date().toISOString().slice(0, 7);
-  const monthId = await ensureRosterMonth(sql, month);
+
+  // Only roster-analysis and roster-mutation tools need a roster_months row.
+  // Read-only lookups must not create draft roster months as a side effect.
+  const toolsRequiringRosterMonth = new Set([
+    "get_system_health",
+    "get_system_analysis",
+    "get_pod_workload",
+    "get_pod_analysis",
+    "get_pending_leaves",
+    "get_leave_queue_analysis",
+    "get_conflicts",
+    "get_employee_schedule",
+    "check_leave_impact_and_conflicts",
+    "assign_replacement_employee",
+  ]);
+  const monthId = toolsRequiringRosterMonth.has(toolName)
+    ? await ensureRosterMonth(sql, month)
+    : `roster-${month}`;
 
   // Check active import state
   const latestImports = await sql`
@@ -2371,8 +2388,12 @@ SENSITIVE ACTIONS:
     });
   } catch (error: any) {
     console.error("Assistant API error:", error);
-    return NextResponse.json({
-      reply: `### ⚠️ Operations Copilot Status\nEncountered an issue processing live query: ${error.message}. Please inspect the Roster Grid directly.`,
-    });
+    return NextResponse.json(
+      {
+        error: "Assistant request failed.",
+        reply: `### ⚠️ Operations Copilot Status\nEncountered an issue processing live query: ${error.message}. Please inspect the Roster Grid directly.`,
+      },
+      { status: 500 }
+    );
   }
 }
