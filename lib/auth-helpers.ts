@@ -43,7 +43,7 @@ export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | 
   }
 
   const user: AuthenticatedUser = {
-    id: sessionUser.id,
+    id: sessionUser.id as string,
     email: sessionUser.email || "",
     role: sessionUser.role,
     employeeId: sessionUser.employeeId || null,
