@@ -276,7 +276,30 @@ export async function PUT(
       },
     });
   } catch (error: any) {
-    console.error("Cell update error:", error);
-    return NextResponse.json({ error: "Failed to update roster cell." }, { status: 500 });
+    const diagnosticId = `roster-cell-${Date.now()}`;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[ROSTER_CELL_UPDATE_FAILED]", {
+      diagnosticId,
+      month,
+      userId: user?.id,
+      role: user?.role,
+      message,
+      code: error?.code,
+      constraint: error?.constraint,
+      detail: error?.detail,
+    });
+
+    // Return a useful, sanitized database/API diagnostic to authorized roster
+    // editors instead of masking every failure with the same generic message.
+    return NextResponse.json(
+      {
+        error: "Failed to update roster cell.",
+        diagnosticId,
+        details: message.slice(0, 300),
+        code: error?.code || undefined,
+        constraint: error?.constraint || undefined,
+      },
+      { status: 500 }
+    );
   }
 }
