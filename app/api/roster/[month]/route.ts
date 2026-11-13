@@ -12,6 +12,7 @@ import {
   HolidayItem,
   LeaveItem,
   CompOffItem,
+  RosterDayAssignment,
 } from "@/lib/scheduler/types";
 
 import { formatDateOnly } from "@/lib/date-utils";
@@ -265,6 +266,20 @@ export async function POST(
     const holRaw = await sql`SELECT * FROM holidays WHERE date >= ${postStartStr} AND date <= ${postEndStr};`;
     const leavesRaw = await sql`SELECT * FROM leaves WHERE status = 'approved' AND end_date >= ${postStartStr} AND start_date <= ${postEndStr};`;
     const compOffsRaw = await sql`SELECT * FROM comp_offs WHERE date >= ${postStartStr} AND date <= ${postEndStr};`;
+    const pinnedDaysRaw = await sql`
+      SELECT employee_id, date, status, brand_process_id, pinned, notes
+      FROM roster_days
+      WHERE roster_month_id = ${monthId} AND pinned = true;
+    `;
+
+    const existingDays: RosterDayAssignment[] = pinnedDaysRaw.map((day: any) => ({
+      employeeId: day.employee_id,
+      date: formatDateOnly(day.date),
+      status: day.status,
+      brandProcessId: day.brand_process_id,
+      pinned: true,
+      notes: day.notes,
+    }));
 
     const employees: EmployeeInfo[] = employeesRaw.map((e: any) => ({
       id: e.id,
@@ -336,6 +351,7 @@ export async function POST(
       holidays,
       leaves,
       compOffs,
+      existingDays,
     });
 
     // Persist the complete generated roster atomically. A failure in any
