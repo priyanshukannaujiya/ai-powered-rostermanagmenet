@@ -158,6 +158,7 @@ export async function POST(req: NextRequest) {
         type: "leave_request_submitted",
         date: startDate,
         metadata: { leaveId, status: "pending" },
+        eventId: `leave-submitted:${leaveId}`,
         notifyPodLead: true,
       });
     } catch (notificationError) {
