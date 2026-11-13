@@ -78,6 +78,22 @@ async function createPodWithLeadership(connectionString: string, id: string, nam
   finally { await tx.close(); }
 }
 
+
+async function deletePodTransaction(connectionString: string, id: string) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    if ((await tx`SELECT id FROM employees WHERE pod_id = ${id} LIMIT 1;`).length) { await tx.rollback(); return { status: 409, error: "This pod still has employees. Reassign them before deleting the pod." }; }
+    const prior = await tx`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1 FOR UPDATE;`;
+    await tx`DELETE FROM pods WHERE id = ${id};`;
+    const leadId = prior[0]?.lead_employee_id;
+    if (leadId && !(await tx`SELECT id FROM pods WHERE lead_employee_id = ${leadId} LIMIT 1;`).length) {
+      await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${leadId} AND role = 'pod_lead';`;
+    }
+    await tx.commit(); return null;
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
 async function updatePodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
   const tx = await beginTransaction(connectionString);
   try {
@@ -431,11 +447,8 @@ export async function DELETE(
         await sql`UPDATE assignments SET active = false, updated_at = now() WHERE id = ${id};`;
         break;
       case "pods": {
-        const linked = await sql`SELECT id FROM employees WHERE pod_id = ${id} LIMIT 1;`;
-        if (linked.length) {
-          return NextResponse.json({ error: "This pod still has employees. Reassign them before deleting the pod." }, { status: 409 });
-        }
-        await sql`DELETE FROM pods WHERE id = ${id};`;
+        const result = await deletePodTransaction(process.env.DATABASE_URL!, id);
+        if (result) return NextResponse.json({ error: result.error }, { status: result.status });
         break;
       }
       case "processes": {
