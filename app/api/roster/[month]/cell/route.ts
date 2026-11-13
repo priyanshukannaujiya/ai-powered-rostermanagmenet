@@ -10,15 +10,16 @@ export const dynamic = "force-dynamic";
 
 async function ensureRosterMonth(sql: any, month: string) {
   const monthId = `roster-${month}`;
-  const existing = await sql`SELECT id FROM roster_months WHERE month = ${month} LIMIT 1;`;
-  if (existing.length === 0) {
-    await sql`
-      INSERT INTO roster_months (id, month, status, generated_at, updated_at)
-      VALUES (${monthId}, ${month}, 'draft', now(), now())
-      ON CONFLICT (month) DO NOTHING;
-    `;
-  }
-  return monthId;
+  await sql`
+    INSERT INTO roster_months (id, month, status, generated_at, updated_at)
+    VALUES (${monthId}, ${month}, 'draft', now(), now())
+    ON CONFLICT (month) DO NOTHING;
+  `;
+  // Always use the actual persisted primary key. Older/imported roster months
+  // may not use the deterministic ID above.
+  const rows = await sql`SELECT id FROM roster_months WHERE month = ${month} LIMIT 1;`;
+  if (!rows.length) throw new Error(`Roster month ${month} could not be initialized.`);
+  return rows[0].id as string;
 }
 
 const editCellSchema = z.object({
@@ -199,20 +200,29 @@ export async function PUT(
       }
     }
 
-    await sql`
-      INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, before, after, created_at, updated_at)
-      VALUES (
-        ${`audit-${Date.now()}`},
-        ${user?.id || null},
-        'MANUAL_ROSTER_EDIT',
-        'roster_days',
-        ${rdId},
-        ${JSON.stringify(beforeState)}::jsonb,
-         ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, leaveOverride: Boolean(isOverride), overrideReason })}::jsonb,
-        now(),
-        now()
-      );
-    `;
+    // Audit logging must never turn a successfully saved roster cell into
+    // a reported failure. Keep the operational update successful and log
+    // audit failures separately for later repair.
+    let auditWarning: string | undefined;
+    try {
+      await sql`
+        INSERT INTO audit_log (id, actor_user_id, action, entity, entity_id, before, after, created_at, updated_at)
+        VALUES (
+          ${`audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`},
+          ${user?.id || null},
+          'MANUAL_ROSTER_EDIT',
+          'roster_days',
+          ${rdId},
+          ${JSON.stringify(beforeState)}::jsonb,
+          ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, leaveOverride: Boolean(isOverride), overrideReason })}::jsonb,
+          now(),
+          now()
+        );
+      `;
+    } catch (auditError) {
+      console.error("Roster cell saved, but audit logging failed:", auditError);
+      auditWarning = "The shift was saved, but its audit record could not be written.";
+    }
 
     // Notify ONLY the employee whose own cell changed, and only when the
     // assignment genuinely changed (repeated saves of the same shift stay quiet).
@@ -252,7 +262,7 @@ export async function PUT(
     return NextResponse.json({
       success: true,
       message: "Cell updated successfully and pinned",
-      notificationWarning,
+      notificationWarning: [notificationWarning, auditWarning].filter(Boolean).join(" ") || undefined,
       day: {
         employee_id: employeeId,
         date,
