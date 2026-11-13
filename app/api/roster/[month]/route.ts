@@ -267,7 +267,7 @@ export async function POST(
     const leavesRaw = await sql`SELECT * FROM leaves WHERE status = 'approved' AND end_date >= ${postStartStr} AND start_date <= ${postEndStr};`;
     const compOffsRaw = await sql`SELECT * FROM comp_offs WHERE date >= ${postStartStr} AND date <= ${postEndStr};`;
     const pinnedDaysRaw = await sql`
-      SELECT employee_id, date, status, brand_process_id, pinned, notes
+      SELECT employee_id, date, status, brand_process_id, pinned, notes, leave_override
       FROM roster_days
       WHERE roster_month_id = ${monthId} AND pinned = true;
     `;
@@ -278,6 +278,7 @@ export async function POST(
       status: day.status,
       brandProcessId: day.brand_process_id,
       pinned: true,
+      leaveOverride: Boolean(day.leave_override),
       notes: day.notes,
     }));
 
@@ -299,6 +300,7 @@ export async function POST(
       minHeadcountWeekday: b.month_min_headcount_weekday,
       minHeadcountSunday: b.month_min_headcount_sunday,
       minHeadcountHoliday: b.month_min_headcount_holiday,
+      customConfig: b.custom_schedule_config || undefined,
     }));
 
     const assignments: AssignmentRule[] = asgnRaw.map((a: any) => ({
