@@ -11,10 +11,9 @@ export interface AuthenticatedUser {
 }
 
 /**
- * Validates the caller's session and role.
- * Employee and Pod Lead accounts with a missing employee_id are safely
- * linked by exact email only when exactly one active, unclaimed employee
- * record matches. Ambiguous or already-linked records are never auto-assigned.
+ * Validates the caller's session and role. If a legacy employee/Pod Lead
+ * account has no employee_id, link it only when exactly one active,
+ * unclaimed employee record has the same normalized email address.
  */
 export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | "employee">): Promise<{
   user?: AuthenticatedUser;
@@ -34,29 +33,23 @@ export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | 
   try {
     const sql = neon(process.env.DATABASE_URL!);
 
-    // Repair legacy employee/Pod Lead accounts that were created without
-    // employee_id. Exact email and a unique, active, unclaimed employee match
-    // are required; never guess when there are zero or multiple matches.
+    // Safe, unambiguous self-repair for older employee and Pod Lead accounts.
+    // The count guard prevents linking if zero or multiple records match.
     await sql`
       UPDATE users AS u
       SET employee_id = (
-        SELECT matches.id
-        FROM (
-          SELECT e.id
-          FROM employees AS e
-          WHERE LOWER(TRIM(e.email)) = LOWER(TRIM(u.email))
-            AND e.active = true
-            AND NOT EXISTS (
-              SELECT 1
-              FROM users AS linked
-              WHERE linked.employee_id = e.id
-                AND linked.id <> u.id
-            )
-          LIMIT 2
-        ) AS matches
-        HAVING COUNT(*) = 1
-      ),
-      updated_at = now()
+        SELECT e.id
+        FROM employees AS e
+        WHERE LOWER(TRIM(e.email)) = LOWER(TRIM(u.email))
+          AND e.active = true
+          AND NOT EXISTS (
+            SELECT 1
+            FROM users AS linked
+            WHERE linked.employee_id = e.id
+              AND linked.id <> u.id
+          )
+        LIMIT 1
+      )
       WHERE u.id = ${session.user.id}
         AND u.employee_id IS NULL
         AND u.role IN ('employee', 'pod_lead')
@@ -78,8 +71,6 @@ export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | 
         ) = 1;
     `;
 
-    // Re-read the account after the guarded repair so current DB permissions
-    // and the newly linked employee ID are used for this request.
     const rows = await sql`
       SELECT u.id, u.email, u.role, u.employee_id, e.active AS employee_active
       FROM users u
