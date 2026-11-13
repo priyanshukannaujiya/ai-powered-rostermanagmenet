@@ -220,8 +220,7 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
       const compOff = getCompOffOnDate(emp.id, demand.date, input.compOffs);
       if (compOff) return false;
 
-      // Check daily process limit
-      const currentProcesses = employeeDailyWorking.get(key) || [];
+      // Check daily process limit. Reuse the candidate's current process list.
       if (currentProcesses.length >= maxPerDay) return false;
       if (currentProcesses.includes(demand.brandProcessId)) return false;
 
@@ -309,11 +308,10 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
       });
       handledDayEmp.add(key);
 
-      // Update load
-      const currentLoad = employeeMonthlyLoad.get(emp.id) || 0;
-      employeeMonthlyLoad.set(emp.id, currentLoad + 1);
-
+      // Count working days, not individual process rows, in monthly workload.
       if (isNewWorkingDay) {
+        const currentLoad = employeeMonthlyLoad.get(emp.id) || 0;
+        employeeMonthlyLoad.set(emp.id, currentLoad + 1);
         const empWeekKey = `${emp.id}_${wIdx}`;
         const wCount = empWeeklyWorkedDays.get(empWeekKey) || 0;
         empWeeklyWorkedDays.set(empWeekKey, wCount + 1);
