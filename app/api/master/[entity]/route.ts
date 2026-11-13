@@ -7,6 +7,21 @@ import bcrypt from "bcryptjs";
 import { beginTransaction } from "@/lib/db/transaction";
 
 export const dynamic = "force-dynamic";
+
+async function createPodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    if (leadEmployeeId) {
+      const employee = await tx`SELECT id FROM employees WHERE id = ${leadEmployeeId} AND active = true LIMIT 1;`;
+      if (!employee.length) throw new Error("Selected pod lead does not exist.");
+    }
+    await tx`INSERT INTO pods (id, name, lead_employee_id, created_at, updated_at) VALUES (${id}, ${name}, ${leadEmployeeId}, now(), now());`;
+    if (leadEmployeeId) await tx`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${leadEmployeeId} AND role != 'manager';`;
+    await tx.commit();
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
 async function updatePodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
   const tx = await beginTransaction(connectionString);
   try {
@@ -274,19 +289,10 @@ export async function POST(
           `;
         }
         break;
-      case "pods":
-        if (body.leadEmployeeId) {
-          const employee = await sql`SELECT id FROM employees WHERE id = ${body.leadEmployeeId} AND active = true LIMIT 1;`;
-          if (!employee.length) return NextResponse.json({ error: "Selected pod lead does not exist." }, { status: 400 });
-        }
-        await sql`
-          INSERT INTO pods (id, name, lead_employee_id, created_at, updated_at)
-          VALUES (${id}, ${body.name}, ${body.leadEmployeeId || null}, now(), now());
-        `;
-        if (body.leadEmployeeId) {
-          await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;
-        }
+      case "pods": {
+        await createPodWithLeadership(process.env.DATABASE_URL!, id, String(body.name), body.leadEmployeeId || null);
         break;
+      }
       case "brands":
         await sql`
           INSERT INTO brands (id, name, code, category, active, created_at, updated_at)
