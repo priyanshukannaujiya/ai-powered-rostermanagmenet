@@ -325,6 +325,7 @@ export const rosterDays = pgTable(
       onDelete: "set null",
     }),
     pinned: boolean("pinned").default(false).notNull(),
+    leaveOverride: boolean("leave_override").default(false).notNull(),
     notes: text("notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -402,13 +403,27 @@ export const notifications = pgTable(
     date: text("date"),
     read: boolean("read").default(false).notNull(),
     metadata: jsonb("metadata"),
+    dedupeKey: text("dedupe_key"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [
     index("notif_emp_idx").on(table.employeeId),
     index("notif_read_idx").on(table.read),
+    uniqueIndex("notifications_dedupe_key_uidx").on(table.dedupeKey),
   ]
+);
+
+// Shared atomic counters for serverless security throttling.
+export const rateLimitBuckets = pgTable(
+  "rate_limit_buckets",
+  {
+    bucketKey: text("bucket_key").primaryKey(),
+    windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+    requestCount: integer("request_count").default(0).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [index("rate_limit_buckets_expiry_idx").on(table.expiresAt)]
 );
 
 // Relations
