@@ -44,6 +44,7 @@ interface ScheduleView {
   notes: string | null;
   pendingLeave: boolean;
   holidayName: string | null;
+  assignments: Array<{ brandName: string | null; brandCode: string | null; processCode: string | null; notes: string | null }>;
 }
 
 interface ApiScheduleDay {
@@ -174,6 +175,7 @@ export default function EmployeePortalPage() {
         notes: day.notes,
         pendingLeave: Boolean(day.pendingLeave),
         holidayName: day.holidayName,
+        assignments: day.assignments || [],
       });
     }
     // Defensive: guarantee one entry per calendar day even if a row is missing.
@@ -190,6 +192,7 @@ export default function EmployeePortalPage() {
         notes: null,
         pendingLeave: false,
         holidayName: null,
+        assignments: [],
       };
     });
   }, [rawScheduleList, allMonthDates, currentMonth]);
@@ -554,6 +557,18 @@ export default function EmployeePortalPage() {
                                     )}
                                   </>
                                 )}
+                                {(item.assignments || []).slice(1).map((assignment, index) => (
+                                  <div key={`${assignment.brandCode || assignment.brandName || "brand"}-${assignment.processCode || index}`} className="mt-1 border-t border-indigo-100 pt-1">
+                                    <div className="text-[10px] font-bold text-indigo-900 truncate" title={assignment.brandName || undefined}>
+                                      {assignment.brandName || "Assigned"}
+                                    </div>
+                                    {assignment.processCode && (
+                                      <span className="text-[9px] font-mono font-bold text-indigo-600 bg-indigo-100/80 px-1 rounded inline-block">
+                                        {assignment.processCode}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
                               </div>
                             )}
 
