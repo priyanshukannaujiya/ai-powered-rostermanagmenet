@@ -76,6 +76,7 @@ export interface RosterDayAssignment {
   status: DayStatus;
   brandProcessId?: string | null;
   pinned?: boolean;
+  leaveOverride?: boolean;
   notes?: string;
 }
 
