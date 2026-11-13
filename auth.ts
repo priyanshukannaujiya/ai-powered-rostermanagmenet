@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { neon } from "@neondatabase/serverless";
 import { authConfig } from "./auth.config";
 import "./lib/db/dns-patch";
+import { consumeRateLimit, clearRateLimit } from "./lib/security/rate-limit";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   ...authConfig,
@@ -14,7 +15,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      authorize: async (credentials) => {
+      authorize: async (credentials, request) => {
         if (!credentials?.email || !credentials?.password) {
           return null;
         }
@@ -28,6 +29,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
 
         const sql = neon(connectionString);
+        const loginKey = `login:account:${email}`;
+        const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+        const sourceIp = forwardedFor || request.headers.get("x-real-ip") || "unknown";
+        const [accountAttempt, sourceAttempt] = await Promise.all([
+          consumeRateLimit(sql, loginKey, 10, 15 * 60),
+          consumeRateLimit(sql, `login:source:${sourceIp}`, 30, 15 * 60),
+        ]);
+        if (!accountAttempt.allowed || !sourceAttempt.allowed) return null;
         const rows = await sql`
           SELECT u.id, u.email, u.password_hash, u.role, u.employee_id
           FROM users u
@@ -51,6 +60,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (!isValid) {
           return null;
         }
+        await clearRateLimit(sql, loginKey);
 
         return {
           id: user.id,
