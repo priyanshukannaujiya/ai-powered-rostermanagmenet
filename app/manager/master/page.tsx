@@ -152,7 +152,7 @@ export default function MasterDataPage() {
 
   const beginCreate = () => {
     setEditingId(null);
-    setFormData(["employees", "brands", "brand_processes", "assignments"].includes(activeTab) ? { active: true } : {});
+    setFormData(activeTab === "assignments" ? { active: true, isExclusive: false, priority: 1 } : ["employees", "brands", "brand_processes"].includes(activeTab) ? { active: true } : {});
     setIsAddModalOpen(true);
   };
 
