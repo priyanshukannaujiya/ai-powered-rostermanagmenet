@@ -86,6 +86,33 @@ export async function PUT(
 
     const monthId = await ensureRosterMonth(sql, month);
 
+    const resolvedBrandProcessId = status === "working" ? brandProcessId || null : null;
+    if (status === "working" && !resolvedBrandProcessId) {
+      return NextResponse.json({ error: "A brand/process must be selected for a working assignment." }, { status: 400 });
+    }
+
+    if (resolvedBrandProcessId) {
+      const eligibleAssignment = await sql`
+        SELECT a.id
+        FROM assignments a
+        JOIN brand_processes bp ON bp.id = a.brand_process_id
+        JOIN brands b ON b.id = bp.brand_id
+        WHERE a.employee_id = ${employeeId}
+          AND a.brand_process_id = ${resolvedBrandProcessId}
+          AND a.active = true
+          AND bp.active = true
+          AND b.active = true
+          AND a.start_date <= ${date}
+          AND (a.end_date IS NULL OR a.end_date >= ${date})
+        LIMIT 1;
+      `;
+      if (!eligibleAssignment.length) {
+        return NextResponse.json({
+          error: "The employee is not actively assigned to this brand/process on the selected date.",
+        }, { status: 422 });
+      }
+    }
+
     // A working shift cannot be forced onto an employee who has approved leave
     // on that date without an explicit manager override.
     if (status === "working") {
@@ -109,19 +136,26 @@ export async function PUT(
     const existing = await sql`
       SELECT * FROM roster_days
       WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date}
-      LIMIT 1;
+      ORDER BY created_at ASC;
     `;
-    const beforeState = existing[0] || null;
+    const beforeState = existing;
 
-    // Delete-then-insert: the unique index includes a nullable brand_process_id,
-    // so an upsert alone would leave the previous assignment in place when the
-    // employee is reassigned to a different brand/process on the same date.
-    await sql`
-      DELETE FROM roster_days
-      WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date};
-    `;
-
-    const resolvedBrandProcessId = status === "working" ? brandProcessId || null : null;
+    // Preserve other working process rows for the same employee/date. A
+    // non-working status intentionally replaces the whole day's assignments.
+    if (status === "working") {
+      await sql`
+        DELETE FROM roster_days
+        WHERE roster_month_id = ${monthId}
+          AND employee_id = ${employeeId}
+          AND date = ${date}
+          AND (status <> 'working' OR brand_process_id = ${resolvedBrandProcessId});
+      `;
+    } else {
+      await sql`
+        DELETE FROM roster_days
+        WHERE roster_month_id = ${monthId} AND employee_id = ${employeeId} AND date = ${date};
+      `;
+    }
     const rdId = `rd-${monthId}-${employeeId}-${date}-${resolvedBrandProcessId || status}`;
     await sql`
       INSERT INTO roster_days (
@@ -131,6 +165,12 @@ export async function PUT(
         ${rdId}, ${monthId}, ${employeeId}, ${date}, ${status as any}, ${resolvedBrandProcessId},
         true, ${overrideReason || "Manual edit"}, now(), now()
       );
+    `;
+
+    // Advance the roster version so an in-flight generation based on an older
+    // snapshot fails its compare-and-swap instead of overwriting this manual edit.
+    await sql`
+      UPDATE roster_months SET updated_at = now() WHERE id = ${monthId};
     `;
 
     // Re-synchronize conflict records so the roster and dashboard immediately reflect live staffing status
@@ -177,10 +217,11 @@ export async function PUT(
     // Notify ONLY the employee whose own cell changed, and only when the
     // assignment genuinely changed (repeated saves of the same shift stay quiet).
     const isWorkingAssignment = status === "working" && Boolean(resolvedBrandProcessId);
-    const wasSameAssignment =
-      Boolean(beforeState) &&
-      beforeState.status === "working" &&
-      beforeState.brand_process_id === resolvedBrandProcessId;
+    const wasSameAssignment = existing.some(
+      (row: any) =>
+        row.status === "working" &&
+        row.brand_process_id === resolvedBrandProcessId
+    );
     let notificationWarning: string | undefined;
 
     if (isWorkingAssignment && !wasSameAssignment) {
