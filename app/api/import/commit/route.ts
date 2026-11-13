@@ -14,6 +14,7 @@ import {
   HolidayItem,
   LeaveItem,
   CompOffItem,
+  RosterDayAssignment,
 } from "@/lib/scheduler/types";
 import { formatDateOnly } from "@/lib/date-utils";
 import { intersectMonthRange, isValidRosterMonth } from "@/lib/import/month";
@@ -103,6 +104,17 @@ export async function POST(req: NextRequest) {
       throw new Error("DATABASE_URL is not configured.");
     }
     const sql = transaction = await beginTransaction(process.env.DATABASE_URL);
+    const existingMonthRows = await sql`
+      SELECT id, status FROM roster_months WHERE month = ${targetMonth} FOR UPDATE;
+    `;
+    if (existingMonthRows[0]?.status === "published") {
+      await sql.rollback();
+      return NextResponse.json({
+        ok: false,
+        error: "PUBLISHED_ROSTER_PROTECTED",
+        message: "This month is already published. Unpublish it before importing replacement roster data.",
+      }, { status: 409 });
+    }
     const importId = `imp-${Date.now()}`;
 
     // 2. Transactional Upsert Execution
@@ -484,10 +496,24 @@ export async function POST(req: NextRequest) {
       INSERT INTO roster_months (id, month, status, generated_at, created_at, updated_at)
       VALUES (${monthId}, ${targetMonth}, 'draft', now(), now(), now())
       ON CONFLICT (month) DO UPDATE SET
-        status = 'draft',
+        status = CASE WHEN roster_months.status = 'published' THEN 'published' ELSE 'draft' END,
         generated_at = now(),
         updated_at = now();
     `;
+
+    const pinnedDaysRaw = await sql`
+      SELECT employee_id, date, status, brand_process_id, pinned, notes
+      FROM roster_days
+      WHERE roster_month_id = ${monthId} AND pinned = true;
+    `;
+    const existingDays: RosterDayAssignment[] = pinnedDaysRaw.map((day: any) => ({
+      employeeId: day.employee_id,
+      date: formatDateOnly(day.date),
+      status: day.status,
+      brandProcessId: day.brand_process_id,
+      pinned: true,
+      notes: day.notes,
+    }));
 
     // Fetch freshly committed master data to run deterministic scheduler
     const [empRows, bpRows, asgnRows, woRows, holRows, leaveRows] = await Promise.all([
@@ -574,11 +600,13 @@ export async function POST(req: NextRequest) {
       holidays: solverHol,
       leaves: solverLeaves,
       compOffs: [],
+      existingDays,
     });
 
-    // Clear previous month assignments and conflicts
-    await sql`DELETE FROM roster_days WHERE roster_month_id = ${monthId};`;
-    await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId};`;
+    // Replace only generated rows. Manually pinned rows survive imports and
+    // are supplied to the scheduler as fixed constraints above.
+    await sql`DELETE FROM roster_days WHERE roster_month_id = ${monthId} AND pinned = false;`;
+    await sql`DELETE FROM conflicts WHERE roster_month_id = ${monthId} AND resolved = false;`;
 
     // Persist new roster days
     for (const d of solverOutput.days) {

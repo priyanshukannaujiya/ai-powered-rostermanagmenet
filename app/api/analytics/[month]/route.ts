@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { formatDateOnly } from "@/lib/date-utils";
+import { isValidRosterMonth } from "@/lib/import/month";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,9 @@ export async function GET(
 
   const sql = neon(process.env.DATABASE_URL!);
   const month = params.month || new Date().toISOString().slice(0, 7);
+  if (!isValidRosterMonth(month)) {
+    return NextResponse.json({ error: "Invalid month format. Expected YYYY-MM." }, { status: 400 });
+  }
   const monthId = `roster-${month}`;
   const isManager = user?.role === "manager";
   if (!isManager && !user?.employeeId) {
@@ -33,13 +37,17 @@ export async function GET(
         b.name as brand_name,
         p.code as process_code,
         bp.id as bp_id,
-        bp.min_headcount_weekday,
+        COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday) as min_headcount_weekday,
+        COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday) as min_headcount_sunday,
+        COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday) as min_headcount_holiday,
         bp.operating_calendar,
+        h.date as holiday_date,
         rd.date,
         COUNT(DISTINCT rd.employee_id) FILTER (WHERE rd.status = 'working') as staffed_count
       FROM brand_processes bp
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id
+      LEFT JOIN roster_month_rules mr ON mr.brand_process_id = bp.id AND mr.month = ${month}
       LEFT JOIN roster_days rd ON rd.brand_process_id = bp.id 
         AND rd.roster_month_id = ${monthId}
         AND rd.status = 'working'
@@ -52,7 +60,12 @@ export async function GET(
               AND scoped_pod.lead_employee_id = ${user?.employeeId || null}
           )
         )
-      GROUP BY b.name, p.code, bp.id, bp.min_headcount_weekday, bp.operating_calendar, rd.date
+      LEFT JOIN holidays h ON h.date = rd.date
+      GROUP BY b.name, p.code, bp.id,
+        COALESCE(mr.min_headcount_weekday, bp.min_headcount_weekday),
+        COALESCE(mr.min_headcount_sunday, bp.min_headcount_sunday),
+        COALESCE(mr.min_headcount_holiday, bp.min_headcount_holiday),
+        bp.operating_calendar, h.date, rd.date
       ORDER BY b.name, p.code, rd.date;
     `;
 
@@ -66,12 +79,20 @@ export async function GET(
           process: row.process_code,
           calendar: row.operating_calendar,
           required: row.min_headcount_weekday,
+          requiredByDate: {},
           days: {},
         });
       }
       if (row.date) {
         const d = formatDateOnly(row.date);
-        heatmapByBrand.get(key).days[d] = parseInt(row.staffed_count) || 0;
+        const entry = heatmapByBrand.get(key);
+        entry.days[d] = parseInt(row.staffed_count) || 0;
+        const weekday = new Date(`${d}T00:00:00.000Z`).getUTCDay();
+        entry.requiredByDate[d] = row.holiday_date
+          ? parseInt(row.min_headcount_holiday) || 0
+          : weekday === 0
+            ? parseInt(row.min_headcount_sunday) || 0
+            : parseInt(row.min_headcount_weekday) || 0;
       }
     }
     const coverageHeatmap = Array.from(heatmapByBrand.values());
@@ -111,6 +132,9 @@ export async function GET(
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id
       LEFT JOIN assignments a ON a.brand_process_id = bp.id AND a.active = true
+        AND a.start_date <= ${monthEnd}
+        AND (a.end_date IS NULL OR a.end_date >= ${monthStart})
+        AND EXISTS (SELECT 1 FROM employees active_employee WHERE active_employee.id = a.employee_id AND active_employee.active = true)
         AND (
           ${isManager}
           OR EXISTS (
@@ -147,6 +171,9 @@ export async function GET(
       JOIN brands b ON bp.brand_id = b.id
       JOIN processes p ON bp.process_id = p.id
       LEFT JOIN assignments a ON a.brand_process_id = bp.id AND a.active = true
+        AND a.start_date <= ${monthEnd}
+        AND (a.end_date IS NULL OR a.end_date >= ${monthStart})
+        AND EXISTS (SELECT 1 FROM employees active_employee WHERE active_employee.id = a.employee_id AND active_employee.active = true)
         AND (
           ${isManager}
           OR EXISTS (
@@ -205,7 +232,10 @@ export async function GET(
     const notifCount = await sql`
       SELECT COUNT(*) as count
       FROM notifications
-      WHERE (
+      WHERE created_at >= ${monthStart}::date
+        AND created_at < (${monthEnd}::date + INTERVAL '1 day')
+        AND type LIKE 'leave_%'
+        AND (
         ${isManager}
         OR EXISTS (
           SELECT 1 FROM employees scoped_employee
@@ -277,7 +307,10 @@ export async function GET(
         COUNT(*) as count
       FROM weekly_offs
       JOIN employees scoped_employee ON scoped_employee.id = weekly_offs.employee_id
-      WHERE (
+      WHERE scoped_employee.active = true
+        AND weekly_offs.effective_from <= ${monthEnd}
+        AND (weekly_offs.effective_to IS NULL OR weekly_offs.effective_to >= ${monthStart})
+        AND (
         ${isManager}
         OR EXISTS (
           SELECT 1 FROM pods scoped_pod

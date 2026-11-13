@@ -517,5 +517,123 @@ describe("Scheduler Engine Pure Scenarios", () => {
     // 3. Diff correctly registers changed day
     expect(replanResult.diff.changedDays.some((d) => d.date === "2026-11-20")).toBe(true);
   });
+
+  it("keeps the sixth pinned working day in the weekly limit when generating the seventh day", () => {
+    const employee: EmployeeInfo = {
+      id: "emp-pinned",
+      name: "Pinned Employee",
+      email: "pinned@example.com",
+      active: true,
+    };
+    const bp: BrandProcessRule = {
+      id: "bp-pinned",
+      brandId: "brand-pinned",
+      brandName: "Pinned Brand",
+      processId: "process-cs",
+      processCode: "CS",
+      operatingCalendar: "all_365",
+      minHeadcountWeekday: 1,
+      minHeadcountSunday: 1,
+      minHeadcountHoliday: 1,
+    };
+    const existingDays = Array.from({ length: 6 }, (_, index) => ({
+      employeeId: employee.id,
+      date: `2026-11-${String(index + 2).padStart(2, "0")}`,
+      status: "working" as const,
+      brandProcessId: bp.id,
+      pinned: true,
+    }));
+
+    const result = generateRoster({
+      month: mockMonth,
+      employees: [employee],
+      brandProcesses: [bp],
+      assignments: [{
+        id: "assignment-pinned",
+        employeeId: employee.id,
+        brandProcessId: bp.id,
+        startDate: "2026-11-01",
+        priority: 1,
+      }],
+      weeklyOffs: [{
+        id: "weekly-off-pinned",
+        employeeId: employee.id,
+        weekday: 0,
+        effectiveFrom: "2026-11-01",
+      }],
+      holidays: [],
+      leaves: [],
+      compOffs: [],
+      existingDays,
+    });
+
+    const sunday = result.days.find((day) => day.employeeId === employee.id && day.date === "2026-11-08");
+    expect(sunday?.status).toBe("weekly_off");
+  });
+
+  it("does not allocate an employee to a second process while an exclusive assignment is active", () => {
+    const employee: EmployeeInfo = {
+      id: "emp-exclusive",
+      name: "Exclusive Employee",
+      email: "exclusive@example.com",
+      active: true,
+    };
+    const brandProcesses: BrandProcessRule[] = [
+      {
+        id: "bp-a",
+        brandId: "brand-a",
+        brandName: "Brand A",
+        processId: "process-cs",
+        processCode: "CS",
+        operatingCalendar: "mon_sat_no_holidays",
+        minHeadcountWeekday: 1,
+        minHeadcountSunday: 0,
+        minHeadcountHoliday: 0,
+      },
+      {
+        id: "bp-b",
+        brandId: "brand-b",
+        brandName: "Brand B",
+        processId: "process-ret",
+        processCode: "RET",
+        operatingCalendar: "mon_sat_no_holidays",
+        minHeadcountWeekday: 1,
+        minHeadcountSunday: 0,
+        minHeadcountHoliday: 0,
+      },
+    ];
+
+    const result = generateRoster({
+      month: mockMonth,
+      employees: [employee],
+      brandProcesses,
+      assignments: [
+        {
+          id: "assignment-exclusive",
+          employeeId: employee.id,
+          brandProcessId: "bp-a",
+          startDate: "2026-11-01",
+          priority: 1,
+          isExclusive: true,
+        },
+        {
+          id: "assignment-second",
+          employeeId: employee.id,
+          brandProcessId: "bp-b",
+          startDate: "2026-11-01",
+          priority: 1,
+        },
+      ],
+      weeklyOffs: [],
+      holidays: [],
+      leaves: [],
+      compOffs: [],
+    });
+
+    expect(result.days.some(
+      (day) => day.employeeId === employee.id && day.date === "2026-11-02" &&
+        day.status === "working" && day.brandProcessId === "bp-b"
+    )).toBe(false);
+  });
 });
 

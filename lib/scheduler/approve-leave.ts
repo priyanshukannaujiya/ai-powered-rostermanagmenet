@@ -164,10 +164,11 @@ export async function approveLeaveAndReplan({
     sql`
       SELECT bp.*, b.name as brand_name, p.code as process_code
       FROM brand_processes bp
-      JOIN brands b ON bp.brand_id = b.id
-      JOIN processes p ON bp.process_id = p.id;
+      JOIN brands b ON bp.brand_id = b.id AND b.active = true
+      JOIN processes p ON bp.process_id = p.id
+      WHERE bp.active = true;
     `,
-    sql`SELECT * FROM assignments;`,
+    sql`SELECT * FROM assignments WHERE active = true;`,
     sql`SELECT * FROM weekly_offs;`,
     sql`
       SELECT DISTINCT b.name as brand_name, p.code as process_code
@@ -208,6 +209,7 @@ export async function approveLeaveAndReplan({
     startDate: formatDateOnly(a.start_date),
     endDate: a.end_date ? formatDateOnly(a.end_date) : null,
     priority: a.priority,
+    isExclusive: a.is_exclusive,
   }));
 
   const weeklyOffs: WeeklyOffRule[] = woRaw.map((w: any) => ({

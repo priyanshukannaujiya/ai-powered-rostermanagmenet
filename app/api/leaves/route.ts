@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { requireAuth } from "@/lib/auth-helpers";
 import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
@@ -9,7 +10,7 @@ import { createEmployeeNotification } from "@/lib/notifications/create";
 export const dynamic = "force-dynamic";
 
 function isValidDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
@@ -25,6 +26,8 @@ const createLeaveSchema = z.object({
   path: ["endDate"],
 });
 
+const LEAVE_STATUSES = ["pending", "approved", "rejected"] as const;
+
 // GET /api/leaves - List leaves with role scoping
 export async function GET(req: NextRequest) {
   const { user, errorResponse } = await requireAuth();
@@ -34,35 +37,39 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const statusFilter = searchParams.get("status");
 
+  if (statusFilter && !LEAVE_STATUSES.includes(statusFilter as (typeof LEAVE_STATUSES)[number])) {
+    return NextResponse.json({ error: "Invalid status filter." }, { status: 400 });
+  }
+
   try {
     let leavesList: any[] = [];
 
     if (user!.role === "employee") {
-      // Employees only see their own leaves
       leavesList = await sql`
         SELECT l.*, e.name as employee_name, e.email as employee_email
         FROM leaves l
         JOIN employees e ON l.employee_id = e.id
         WHERE l.employee_id = ${user!.employeeId}
+          AND (${statusFilter}::text IS NULL OR l.status = ${statusFilter})
         ORDER BY l.start_date DESC;
       `;
     } else if (user!.role === "pod_lead") {
-      // Pod leads see leaves for their pod
       leavesList = await sql`
         SELECT l.*, e.name as employee_name, e.email as employee_email, p.name as pod_name
         FROM leaves l
         JOIN employees e ON l.employee_id = e.id
         LEFT JOIN pods p ON e.pod_id = p.id
-        WHERE p.lead_employee_id = ${user!.employeeId} OR e.id = ${user!.employeeId}
+        WHERE (p.lead_employee_id = ${user!.employeeId} OR e.id = ${user!.employeeId})
+          AND (${statusFilter}::text IS NULL OR l.status = ${statusFilter})
         ORDER BY l.status = 'pending' DESC, l.start_date DESC;
       `;
     } else {
-      // Managers see all leaves
       leavesList = await sql`
         SELECT l.*, e.name as employee_name, e.email as employee_email, p.name as pod_name
         FROM leaves l
         JOIN employees e ON l.employee_id = e.id
         LEFT JOIN pods p ON e.pod_id = p.id
+        WHERE (${statusFilter}::text IS NULL OR l.status = ${statusFilter})
         ORDER BY l.status = 'pending' DESC, l.start_date DESC;
       `;
     }
@@ -76,7 +83,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ leaves: formattedLeaves });
   } catch (error: any) {
     console.error("Fetch leaves error:", error);
-    return NextResponse.json({ error: error.message || "Failed to load leaves" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load leaves" }, { status: 500 });
   }
 }
 
@@ -96,7 +103,6 @@ export async function POST(req: NextRequest) {
 
     const { startDate, endDate, type, reason } = parsed.data;
 
-    // Role-based target employee determination
     let targetEmployeeId = user!.employeeId;
     if (user!.role === "manager" && parsed.data.employeeId) {
       targetEmployeeId = parsed.data.employeeId;
@@ -112,7 +118,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "The selected employee is not active or does not exist." }, { status: 404 });
     }
 
-    const leaveId = `leave-${Date.now()}`;
+    // Prevent overlapping pending or approved requests for the same employee.
+    // A database exclusion constraint/transactional lock is still needed to close
+    // the race between this check and a simultaneous request.
+    const overlappingLeaves = await sql`
+      SELECT id, start_date, end_date, status
+      FROM leaves
+      WHERE employee_id = ${targetEmployeeId}
+        AND status IN ('pending', 'approved')
+        AND start_date <= ${endDate}
+        AND end_date >= ${startDate}
+      LIMIT 1;
+    `;
+    if (overlappingLeaves.length) {
+      return NextResponse.json({
+        error: "LEAVE_DATE_OVERLAP",
+        message: "This employee already has a pending or approved leave request that overlaps the selected dates.",
+        conflictingLeave: {
+          id: overlappingLeaves[0].id,
+          startDate: formatDateOnly(overlappingLeaves[0].start_date),
+          endDate: formatDateOnly(overlappingLeaves[0].end_date),
+          status: overlappingLeaves[0].status,
+        },
+      }, { status: 409 });
+    }
+
+    const leaveId = `leave-${randomUUID()}`;
     await sql`
       INSERT INTO leaves (id, employee_id, start_date, end_date, type, reason, status, created_at, updated_at)
       VALUES (${leaveId}, ${targetEmployeeId}, ${startDate}, ${endDate}, ${type}, ${reason || null}, 'pending', now(), now());
@@ -142,6 +173,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("Create leave error:", error);
-    return NextResponse.json({ error: error.message || "Failed to submit leave" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to submit leave" }, { status: 500 });
   }
 }

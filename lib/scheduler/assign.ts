@@ -69,6 +69,15 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
   const assignmentList: RosterDayAssignment[] = [];
   const handledDayEmp = new Set<string>(); // `${date}_${employeeId}`
 
+  // Build week indexes before loading pinned assignments so their workload
+  // contributes to the same weekly limits as newly generated assignments.
+  const calendarWeeks = groupDatesByCalendarWeek(dates);
+  const dateToWeekMap = new Map<string, number>();
+  for (let wIdx = 0; wIdx < calendarWeeks.length; wIdx++) {
+    for (const d of calendarWeeks[wIdx]) dateToWeekMap.set(d, wIdx);
+  }
+  const empWeeklyWorkedDays = new Map<string, number>();
+
   for (const emp of input.employees) {
     employeeMonthlyLoad.set(emp.id, 0);
   }
@@ -80,14 +89,20 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
         assignmentList.push(d);
         handledDayEmp.add(`${d.date}_${d.employeeId}`);
         if (d.status === "working") {
-          const count = employeeMonthlyLoad.get(d.employeeId) || 0;
-          employeeMonthlyLoad.set(d.employeeId, count + 1);
-
           const key = `${d.date}_${d.employeeId}`;
-          if (!employeeDailyWorking.has(key)) {
-            employeeDailyWorking.set(key, []);
+          const isFirstWorkingAssignmentForDay =
+            !employeeDailyWorking.has(key) || employeeDailyWorking.get(key)!.length === 0;
+          if (isFirstWorkingAssignmentForDay) {
+            const count = employeeMonthlyLoad.get(d.employeeId) || 0;
+            employeeMonthlyLoad.set(d.employeeId, count + 1);
+            const weekIndex = dateToWeekMap.get(d.date);
+            if (weekIndex !== undefined) {
+              const weekKey = `${d.employeeId}_${weekIndex}`;
+              empWeeklyWorkedDays.set(weekKey, (empWeeklyWorkedDays.get(weekKey) || 0) + 1);
+            }
           }
-          if (d.brandProcessId) {
+          if (!employeeDailyWorking.has(key)) employeeDailyWorking.set(key, []);
+          if (d.brandProcessId && !employeeDailyWorking.get(key)!.includes(d.brandProcessId)) {
             employeeDailyWorking.get(key)!.push(d.brandProcessId);
           }
         }
@@ -138,18 +153,6 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
     return a.demand.brandProcessId.localeCompare(b.demand.brandProcessId);
   });
 
-  // Map dates to their calendar week index
-  const calendarWeeks = groupDatesByCalendarWeek(dates);
-  const dateToWeekMap = new Map<string, number>();
-  for (let wIdx = 0; wIdx < calendarWeeks.length; wIdx++) {
-    for (const d of calendarWeeks[wIdx]) {
-      dateToWeekMap.set(d, wIdx);
-    }
-  }
-
-  // Track how many days each employee has worked per calendar week: Map<`${employeeId}_${weekIdx}`, number>
-  const empWeeklyWorkedDays = new Map<string, number>();
-
   // Helper to get preferred weekly off weekday for an employee
   function getPreferredOffDow(empId: string, date: string): number {
     const woRule = input.weeklyOffs.find(
@@ -181,6 +184,23 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
     const candidates = eligible.filter((emp) => {
       // If already pinned on this day, check compatibility
       const key = `${demand.date}_${emp.id}`;
+      const currentProcesses = employeeDailyWorking.get(key) || [];
+      const activeRules = input.assignments.filter(
+        (rule) =>
+          rule.employeeId === emp.id &&
+          rule.startDate <= demand.date &&
+          (!rule.endDate || rule.endDate >= demand.date)
+      );
+      // An exclusive assignment reserves the employee for that process on this date.
+      if (activeRules.some((rule) => rule.isExclusive && rule.brandProcessId !== demand.brandProcessId)) {
+        return false;
+      }
+      if (
+        activeRules.some((rule) => rule.isExclusive && rule.brandProcessId === demand.brandProcessId) &&
+        currentProcesses.some((processId) => processId !== demand.brandProcessId)
+      ) {
+        return false;
+      }
       const existing = input.existingDays?.find(
         (ex) => ex.employeeId === emp.id && ex.date === demand.date && ex.pinned
       );
@@ -200,8 +220,7 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
       const compOff = getCompOffOnDate(emp.id, demand.date, input.compOffs);
       if (compOff) return false;
 
-      // Check daily process limit
-      const currentProcesses = employeeDailyWorking.get(key) || [];
+      // Check daily process limit. Reuse the candidate's current process list.
       if (currentProcesses.length >= maxPerDay) return false;
       if (currentProcesses.includes(demand.brandProcessId)) return false;
 
@@ -289,11 +308,10 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
       });
       handledDayEmp.add(key);
 
-      // Update load
-      const currentLoad = employeeMonthlyLoad.get(emp.id) || 0;
-      employeeMonthlyLoad.set(emp.id, currentLoad + 1);
-
+      // Count working days, not individual process rows, in monthly workload.
       if (isNewWorkingDay) {
+        const currentLoad = employeeMonthlyLoad.get(emp.id) || 0;
+        employeeMonthlyLoad.set(emp.id, currentLoad + 1);
         const empWeekKey = `${emp.id}_${wIdx}`;
         const wCount = empWeeklyWorkedDays.get(empWeekKey) || 0;
         empWeeklyWorkedDays.set(empWeekKey, wCount + 1);
@@ -310,15 +328,20 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
   for (const emp of input.employees) {
     if (!emp.active) continue;
 
-    const woRule = input.weeklyOffs.find(
-      (w) =>
-        w.employeeId === emp.id &&
-        w.effectiveFrom <= dates[dates.length - 1] &&
-        (!w.effectiveTo || w.effectiveTo >= dates[0])
-    );
-    const preferredDow = woRule ? woRule.weekday : 0; // 0 = Sunday default
-
     for (const weekDates of calendarWeeks) {
+      // Resolve the effective weekly-off rule against each date. This supports
+      // rule changes within a month (including a change during this calendar week).
+      const preferredDate = weekDates.find((date) => {
+        const rule = input.weeklyOffs.find(
+          (w) =>
+            w.employeeId === emp.id &&
+            w.effectiveFrom <= date &&
+            (!w.effectiveTo || w.effectiveTo >= date)
+        );
+        return getDayOfWeek(date) === (rule ? rule.weekday : 0);
+      });
+      const preferredDow = preferredDate ? getDayOfWeek(preferredDate) : 0;
+
       // Check if employee already has an assignment in this week that counts as off (pinned weekly_off, leave, comp-off)
       const weekKeys = weekDates.map((d) => `${d}_${emp.id}`);
       const hasExistingOff = weekDates.some((d) => {
@@ -332,7 +355,6 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
       }
 
       // Check if preferred day in this week is available (not working and not pinned)
-      const preferredDate = weekDates.find((d) => getDayOfWeek(d) === preferredDow);
       const isPreferredWorking = preferredDate && employeeDailyWorking.has(`${preferredDate}_${emp.id}`) && employeeDailyWorking.get(`${preferredDate}_${emp.id}`)!.length > 0;
 
       let chosenDate: string | null = null;
@@ -350,8 +372,12 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
         if (candidateDates.length > 0) {
           // Sort by distance to preferred day
           candidateDates.sort((a, b) => {
-            const distA = preferredDate ? Math.abs(getDayOfWeek(a) - preferredDow) : 0;
-            const distB = preferredDate ? Math.abs(getDayOfWeek(b) - preferredDow) : 0;
+            const circularWeekdayDistance = (day: number) => {
+              const direct = Math.abs(day - preferredDow);
+              return Math.min(direct, 7 - direct);
+            };
+            const distA = preferredDate ? circularWeekdayDistance(getDayOfWeek(a)) : 0;
+            const distB = preferredDate ? circularWeekdayDistance(getDayOfWeek(b)) : 0;
             return distA - distB;
           });
           chosenDate = candidateDates[0];
