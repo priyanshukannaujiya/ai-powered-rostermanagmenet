@@ -2388,8 +2388,12 @@ SENSITIVE ACTIONS:
     });
   } catch (error: any) {
     console.error("Assistant API error:", error);
-    return NextResponse.json({
-      reply: `### ⚠️ Operations Copilot Status\nEncountered an issue processing live query: ${error.message}. Please inspect the Roster Grid directly.`,
-    });
+    return NextResponse.json(
+      {
+        error: "Assistant request failed.",
+        reply: `### ⚠️ Operations Copilot Status\nEncountered an issue processing live query: ${error.message}. Please inspect the Roster Grid directly.`,
+      },
+      { status: 500 }
+    );
   }
 }
