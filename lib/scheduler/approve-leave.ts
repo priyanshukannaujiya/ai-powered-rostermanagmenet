@@ -506,7 +506,7 @@ export async function approveLeaveAndReplan({
     throw txError;
   }
 
-  if (!txResults[0] || txResults[0].length === 0) {
+  if (!txResults[1] || txResults[1].length === 0) {
     return {
       success: false,
       error: "This leave request was already approved or reviewed concurrently by another manager.",
