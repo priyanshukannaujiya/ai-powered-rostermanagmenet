@@ -51,6 +51,7 @@ export interface ScheduleSummary {
   weeklyOff: number;
   leave: number;
   holiday: number;
+  compOff: number;
   pendingLeave: number;
   unassigned: number;
 }
@@ -65,8 +66,8 @@ const STATUS_PRIORITY: Record<string, number> = {
 };
 
 /**
- * Collapses duplicate roster rows for the same date into the single most
- * authoritative record (approved leave beats a stale working assignment).
+ * Selects the authoritative non-working status for a date.
+ * Multiple working process rows are handled separately by the schedule builder.
  */
 export function dedupeRosterDays(rows: RosterDayRow[]): Map<string, RosterDayRow> {
   const byDate = new Map<string, RosterDayRow>();
@@ -133,6 +134,7 @@ export function buildEmployeeSchedule(params: {
     weeklyOff: 0,
     leave: 0,
     holiday: 0,
+    compOff: 0,
     pendingLeave: 0,
     unassigned: 0,
   };
@@ -171,7 +173,6 @@ export function buildEmployeeSchedule(params: {
       status = "unassigned";
     }
 
-    // Only a working shift carries a brand/process assignment.
     if (status !== "working") {
       brandName = null;
       brandCode = null;
@@ -195,6 +196,9 @@ export function buildEmployeeSchedule(params: {
         break;
       case "holiday":
         summary.holiday += 1;
+        break;
+      case "comp_off":
+        summary.compOff += 1;
         break;
       default:
         summary.unassigned += 1;
