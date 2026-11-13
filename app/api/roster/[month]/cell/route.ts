@@ -159,11 +159,11 @@ export async function PUT(
     const rdId = `rd-${monthId}-${employeeId}-${date}-${resolvedBrandProcessId || status}`;
     await sql`
       INSERT INTO roster_days (
-        id, roster_month_id, employee_id, date, status, brand_process_id, pinned, notes, created_at, updated_at
+        id, roster_month_id, employee_id, date, status, brand_process_id, pinned, leave_override, notes, created_at, updated_at
       )
       VALUES (
         ${rdId}, ${monthId}, ${employeeId}, ${date}, ${status as any}, ${resolvedBrandProcessId},
-        true, ${overrideReason || "Manual edit"}, now(), now()
+        true, ${Boolean(isOverride)}, ${overrideReason || "Manual edit"}, now(), now()
       );
     `;
 
@@ -208,7 +208,7 @@ export async function PUT(
         'roster_days',
         ${rdId},
         ${JSON.stringify(beforeState)},
-        ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, overrideReason })},
+         ${JSON.stringify({ employeeId, date, status, brandProcessId: resolvedBrandProcessId, leaveOverride: Boolean(isOverride), overrideReason })},
         now(),
         now()
       );
@@ -240,6 +240,7 @@ export async function PUT(
             brandName,
             processCode,
           },
+          eventId: `shift-assignment:${employeeId}:${date}:${resolvedBrandProcessId || status}`,
           notifyPodLead: false,
         });
       } catch (notificationError) {

@@ -4,8 +4,117 @@ import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
+import { beginTransaction } from "@/lib/db/transaction";
 
 export const dynamic = "force-dynamic";
+
+
+
+async function createEmployeeTransaction(connectionString: string, id: string, body: any) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    const email = String(body.email).trim().toLowerCase();
+    if ((await tx`SELECT id FROM employees WHERE LOWER(email) = ${email} LIMIT 1;`).length) { await tx.rollback(); return { status: 409, error: "An employee with this email already exists." }; }
+    if (body.podId && !(await tx`SELECT id FROM pods WHERE id = ${body.podId} LIMIT 1;`).length) { await tx.rollback(); return { status: 400, error: "Selected pod does not exist." }; }
+    if (body.initialPassword && (await tx`SELECT id FROM users WHERE LOWER(email) = ${email} LIMIT 1;`).length) { await tx.rollback(); return { status: 409, error: "This email already belongs to a login account." }; }
+    await tx`INSERT INTO employees (id, name, email, pod_id, active, created_at, updated_at) VALUES (${id}, ${String(body.name).trim()}, ${email}, ${body.podId || null}, ${body.active}, now(), now());`;
+    if (body.initialPassword) {
+      const passwordHash = await bcrypt.hash(String(body.initialPassword), 12);
+      await tx`INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at) VALUES (${`user-${id}`}, ${email}, ${passwordHash}, 'employee', ${id}, now(), now());`;
+    }
+    await tx.commit(); return null;
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
+async function updateEmployeeTransaction(connectionString: string, id: string, body: any) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    const email = String(body.email).trim().toLowerCase();
+    if (!(await tx`SELECT id FROM employees WHERE id = ${id} LIMIT 1 FOR UPDATE;`).length) { await tx.rollback(); return { status: 404, error: "Employee not found." }; }
+    if ((await tx`SELECT id FROM employees WHERE LOWER(email) = ${email} AND id != ${id} LIMIT 1;`).length) { await tx.rollback(); return { status: 409, error: "An employee with this email already exists." }; }
+    if (body.podId && !(await tx`SELECT id FROM pods WHERE id = ${body.podId} LIMIT 1;`).length) { await tx.rollback(); return { status: 400, error: "Selected pod does not exist." }; }
+    const accounts = await tx`SELECT id, role, employee_id FROM users WHERE employee_id = ${id} OR LOWER(email) = ${email};`;
+    if (accounts.some((account) => account.role === "manager" || (account.employee_id && account.employee_id !== id))) { await tx.rollback(); return { status: 409, error: "This email belongs to another or manager account." }; }
+    await tx`UPDATE employees SET name = ${String(body.name).trim()}, email = ${email}, pod_id = ${body.podId || null}, active = ${body.active}, updated_at = now() WHERE id = ${id};`;
+    if (!body.active) {
+      await tx`UPDATE pods SET lead_employee_id = NULL, updated_at = now() WHERE lead_employee_id = ${id};`;
+      await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${id} AND role = 'pod_lead';`;
+    }
+    if (body.initialPassword) {
+      const passwordHash = await bcrypt.hash(String(body.initialPassword), 12);
+      if (accounts.length) await tx`UPDATE users SET email = ${email}, password_hash = ${passwordHash}, updated_at = now() WHERE id = ${accounts[0].id};`;
+      else await tx`INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at) VALUES (${`user-${id}`}, ${email}, ${passwordHash}, 'employee', ${id}, now(), now());`;
+    } else {
+      await tx`UPDATE users SET email = ${email}, updated_at = now() WHERE employee_id = ${id} AND role != 'manager';`;
+    }
+    await tx.commit(); return null;
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
+async function deactivateEmployeeAndClearLeadership(connectionString: string, id: string) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    await tx`UPDATE employees SET active = false, updated_at = now() WHERE id = ${id};`;
+    await tx`UPDATE pods SET lead_employee_id = NULL, updated_at = now() WHERE lead_employee_id = ${id};`;
+    await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${id} AND role = 'pod_lead';`;
+    await tx.commit();
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
+async function createPodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    if (leadEmployeeId) {
+      const employee = await tx`SELECT id FROM employees WHERE id = ${leadEmployeeId} AND active = true LIMIT 1;`;
+      if (!employee.length) throw new Error("Selected pod lead does not exist.");
+    }
+    await tx`INSERT INTO pods (id, name, lead_employee_id, created_at, updated_at) VALUES (${id}, ${name}, ${leadEmployeeId}, now(), now());`;
+    if (leadEmployeeId) await tx`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${leadEmployeeId} AND role != 'manager';`;
+    await tx.commit();
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
+
+async function deletePodTransaction(connectionString: string, id: string) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    if ((await tx`SELECT id FROM employees WHERE pod_id = ${id} LIMIT 1;`).length) { await tx.rollback(); return { status: 409, error: "This pod still has employees. Reassign them before deleting the pod." }; }
+    const prior = await tx`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1 FOR UPDATE;`;
+    await tx`DELETE FROM pods WHERE id = ${id};`;
+    const leadId = prior[0]?.lead_employee_id;
+    if (leadId && !(await tx`SELECT id FROM pods WHERE lead_employee_id = ${leadId} LIMIT 1;`).length) {
+      await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${leadId} AND role = 'pod_lead';`;
+    }
+    await tx.commit(); return null;
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
+async function updatePodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    if (leadEmployeeId) {
+      const employee = await tx`SELECT id FROM employees WHERE id = ${leadEmployeeId} AND active = true LIMIT 1;`;
+      if (!employee.length) throw new Error("Selected pod lead does not exist.");
+    }
+    const prior = await tx`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1 FOR UPDATE;`;
+    if (!prior.length) throw new Error("Pod not found.");
+    const previousLeadId = prior[0].lead_employee_id as string | null;
+    await tx`UPDATE pods SET name = ${name}, lead_employee_id = ${leadEmployeeId}, updated_at = now() WHERE id = ${id};`;
+    if (previousLeadId && previousLeadId !== leadEmployeeId) {
+      const other = await tx`SELECT id FROM pods WHERE lead_employee_id = ${previousLeadId} AND id != ${id} LIMIT 1;`;
+      if (!other.length) await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${previousLeadId} AND role = 'pod_lead';`;
+    }
+    if (leadEmployeeId) await tx`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${leadEmployeeId} AND role != 'manager';`;
+    await tx.commit();
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
 
 const ALLOWED_ENTITIES = [
   "employees",
@@ -223,48 +332,15 @@ export async function POST(
     const id = `${entity.slice(0, 3)}-${randomUUID()}`;
 
     switch (entity) {
-      case "employees":
-        {
-          const existingEmployee = await sql`SELECT id FROM employees WHERE LOWER(email) = ${String(body.email).trim().toLowerCase()} LIMIT 1;`;
-          if (existingEmployee.length) return NextResponse.json({ error: "An employee with this email already exists." }, { status: 409 });
-        }
-        if (body.podId) {
-          const pod = await sql`SELECT id FROM pods WHERE id = ${body.podId} LIMIT 1;`;
-          if (!pod.length) return NextResponse.json({ error: "Selected pod does not exist." }, { status: 400 });
-        }
-        if (body.initialPassword) {
-          const normalizedEmail = String(body.email).trim().toLowerCase();
-          const existingUser = await sql`SELECT id FROM users WHERE LOWER(email) = ${normalizedEmail} LIMIT 1;`;
-          if (existingUser.length) return NextResponse.json({ error: "This email already belongs to a login account." }, { status: 409 });
-        }
-        await sql`
-          INSERT INTO employees (id, name, email, pod_id, active, created_at, updated_at)
-          VALUES (${id}, ${String(body.name).trim()}, ${String(body.email).trim().toLowerCase()}, ${body.podId || null}, ${body.active}, now(), now());
-        `;
-        if (body.initialPassword) {
-          const passwordHash = await bcrypt.hash(String(body.initialPassword), 12);
-          const podLead = body.podId
-            ? await sql`SELECT id FROM pods WHERE id = ${body.podId} AND lead_employee_id = ${id} LIMIT 1;`
-            : [];
-          await sql`
-            INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at)
-            VALUES (${`user-${id}`}, ${String(body.email).trim().toLowerCase()}, ${passwordHash}, ${podLead.length ? "pod_lead" : "employee"}, ${id}, now(), now());
-          `;
-        }
+      case "employees": {
+        const result = await createEmployeeTransaction(process.env.DATABASE_URL!, id, body);
+        if (result) return NextResponse.json({ error: result.error }, { status: result.status });
         break;
-      case "pods":
-        if (body.leadEmployeeId) {
-          const employee = await sql`SELECT id FROM employees WHERE id = ${body.leadEmployeeId} AND active = true LIMIT 1;`;
-          if (!employee.length) return NextResponse.json({ error: "Selected pod lead does not exist." }, { status: 400 });
-        }
-        await sql`
-          INSERT INTO pods (id, name, lead_employee_id, created_at, updated_at)
-          VALUES (${id}, ${body.name}, ${body.leadEmployeeId || null}, now(), now());
-        `;
-        if (body.leadEmployeeId) {
-          await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;
-        }
+      }
+      case "pods": {
+        await createPodWithLeadership(process.env.DATABASE_URL!, id, String(body.name), body.leadEmployeeId || null);
         break;
+      }
       case "brands":
         await sql`
           INSERT INTO brands (id, name, code, category, active, created_at, updated_at)
@@ -362,7 +438,7 @@ export async function DELETE(
   try {
     switch (entity) {
       case "employees":
-        await sql`UPDATE employees SET active = false, updated_at = now() WHERE id = ${id};`;
+        await deactivateEmployeeAndClearLeadership(process.env.DATABASE_URL!, id);
         break;
       case "brand_processes":
         await sql`UPDATE brand_processes SET active = false, updated_at = now() WHERE id = ${id};`;
@@ -371,11 +447,8 @@ export async function DELETE(
         await sql`UPDATE assignments SET active = false, updated_at = now() WHERE id = ${id};`;
         break;
       case "pods": {
-        const linked = await sql`SELECT id FROM employees WHERE pod_id = ${id} LIMIT 1;`;
-        if (linked.length) {
-          return NextResponse.json({ error: "This pod still has employees. Reassign them before deleting the pod." }, { status: 409 });
-        }
-        await sql`DELETE FROM pods WHERE id = ${id};`;
+        const result = await deletePodTransaction(process.env.DATABASE_URL!, id);
+        if (result) return NextResponse.json({ error: result.error }, { status: result.status });
         break;
       }
       case "processes": {
@@ -424,65 +497,15 @@ export async function PUT(
     if (validationError) return NextResponse.json({ error: validationError }, { status: 400 });
     const sql = neon(process.env.DATABASE_URL!);
     switch (entity) {
-      case "employees":
-        {
-          const existingEmployee = await sql`SELECT id FROM employees WHERE id = ${id} LIMIT 1;`;
-          if (!existingEmployee.length) return NextResponse.json({ error: "Employee not found." }, { status: 404 });
-          const duplicateEmployee = await sql`SELECT id FROM employees WHERE LOWER(email) = ${String(body.email).trim().toLowerCase()} AND id != ${id} LIMIT 1;`;
-          if (duplicateEmployee.length) return NextResponse.json({ error: "An employee with this email already exists." }, { status: 409 });
-          if (body.podId) {
-            const pod = await sql`SELECT id FROM pods WHERE id = ${body.podId} LIMIT 1;`;
-            if (!pod.length) return NextResponse.json({ error: "Selected pod does not exist." }, { status: 400 });
-          }
-          const normalizedEmail = String(body.email).trim().toLowerCase();
-          const matchingAccounts = await sql`
-            SELECT id, role, employee_id FROM users
-            WHERE employee_id = ${id} OR LOWER(email) = ${normalizedEmail};
-          `;
-          if (matchingAccounts.some((account) => account.role === "manager" || (account.employee_id && account.employee_id !== id))) {
-            return NextResponse.json({ error: "This email belongs to another or manager account." }, { status: 409 });
-          }
-          await sql`UPDATE employees SET name = ${String(body.name).trim()}, email = ${normalizedEmail}, pod_id = ${body.podId || null}, active = ${body.active}, updated_at = now() WHERE id = ${id};`;
-        if (body.initialPassword) {
-          const passwordHash = await bcrypt.hash(String(body.initialPassword), 12);
-          if (matchingAccounts.length) {
-            await sql`UPDATE users SET email = ${normalizedEmail}, password_hash = ${passwordHash}, updated_at = now() WHERE id = ${matchingAccounts[0].id};`;
-          } else {
-            await sql`
-              INSERT INTO users (id, email, password_hash, role, employee_id, created_at, updated_at)
-              VALUES (${`user-${id}`}, ${normalizedEmail}, ${passwordHash}, 'employee', ${id}, now(), now());
-            `;
-          }
-        } else {
-          await sql`UPDATE users SET email = ${normalizedEmail}, updated_at = now() WHERE employee_id = ${id} AND role != 'manager';`;
-        }
+      case "employees": {
+        const result = await updateEmployeeTransaction(process.env.DATABASE_URL!, id, body);
+        if (result) return NextResponse.json({ error: result.error }, { status: result.status });
         break;
-        }
-      case "pods":
-        {
-          if (body.leadEmployeeId) {
-            const employee = await sql`SELECT id FROM employees WHERE id = ${body.leadEmployeeId} AND active = true LIMIT 1;`;
-            if (!employee.length) return NextResponse.json({ error: "Selected pod lead does not exist." }, { status: 400 });
-          }
-          const priorLead = await sql`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1;`;
-          if (!priorLead.length) return NextResponse.json({ error: "Pod not found." }, { status: 404 });
-        await sql`UPDATE pods SET name = ${body.name}, lead_employee_id = ${body.leadEmployeeId || null}, updated_at = now() WHERE id = ${id};`;
-          if (priorLead[0].lead_employee_id && priorLead[0].lead_employee_id !== body.leadEmployeeId) {
-            const otherLedPods = await sql`
-              SELECT id FROM pods
-              WHERE lead_employee_id = ${priorLead[0].lead_employee_id}
-                AND id != ${id}
-              LIMIT 1;
-            `;
-            if (otherLedPods.length === 0) {
-              await sql`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${priorLead[0].lead_employee_id} AND role = 'pod_lead';`;
-            }
-          }
-          if (body.leadEmployeeId) {
-            await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;
-          }
-        }
+      }
+      case "pods": {
+        await updatePodWithLeadership(process.env.DATABASE_URL!, id, String(body.name), body.leadEmployeeId || null);
         break;
+      }
       case "brands":
         await sql`UPDATE brands SET name = ${String(body.name).trim()}, code = ${String(body.code).trim().toUpperCase()}, category = ${body.category || null}, active = ${body.active}, updated_at = now() WHERE id = ${id};`;
         break;

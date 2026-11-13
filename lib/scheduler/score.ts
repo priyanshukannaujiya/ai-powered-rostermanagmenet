@@ -10,6 +10,7 @@ export interface CandidateScoreContext {
   assignedTodayCount: number;
   preferredOffWeekday: number;
   consecutiveWorkingDaysBefore: number;
+  assignmentPriority?: number;
 }
 
 /**
@@ -19,6 +20,9 @@ export interface CandidateScoreContext {
  */
 export function calculateCandidateCost(context: CandidateScoreContext): number {
   let cost = 0;
+
+  // Lower numeric assignment priority is more important (1 is highest).
+  cost += Math.max(0, (context.assignmentPriority ?? 1) - 1) * 25;
 
   // 1. Fair distribution of workload (heaviest weight on cumulative month load)
   cost += context.currentMonthlyWorkingDays * 10;

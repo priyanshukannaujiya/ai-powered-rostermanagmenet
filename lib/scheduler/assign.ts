@@ -267,8 +267,13 @@ export function generateRoster(input: SchedulerInput): SchedulerOutput {
         }
       }
 
+      const activeAssignment = input.assignments
+        .filter((rule) => rule.employeeId === emp.id && rule.brandProcessId === demand.brandProcessId &&
+          rule.startDate <= demand.date && (!rule.endDate || rule.endDate >= demand.date))
+        .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))[0];
       const cost = calculateCandidateCost({
         employeeId: emp.id,
+        assignmentPriority: activeAssignment?.priority ?? 1,
         date: demand.date,
         currentMonthlyWorkingDays: employeeMonthlyLoad.get(emp.id) || 0,
         assignedTodayCount: currentProcesses.length,

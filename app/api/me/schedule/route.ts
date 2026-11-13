@@ -70,6 +70,7 @@ export async function GET(req: NextRequest) {
           rd.status,
           rd.notes,
           rd.pinned,
+          rd.leave_override,
           rd.brand_process_id,
           b.name AS brand_name,
           b.code AS brand_code,
@@ -110,6 +111,7 @@ export async function GET(req: NextRequest) {
       processCode: row.process_code || null,
       notes: row.notes || null,
       pinned: Boolean(row.pinned),
+      leaveOverride: Boolean(row.leave_override),
     }));
 
     const leaves: LeaveRow[] = leavesRaw.map((row: any) => ({

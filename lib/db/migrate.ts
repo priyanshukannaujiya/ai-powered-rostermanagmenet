@@ -331,6 +331,16 @@ async function runMigrations() {
       );
     `;
 
+    // 2a. Integrity and distributed security controls.
+    await sql`UPDATE pods p SET lead_employee_id = NULL, updated_at = now() WHERE lead_employee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.id = p.lead_employee_id AND e.active = true);`;
+    await sql`DO $ BEGIN ALTER TABLE pods ADD CONSTRAINT pods_lead_employee_fk FOREIGN KEY (lead_employee_id) REFERENCES employees(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_object THEN NULL; END $;`;
+    await sql`ALTER TABLE roster_days ADD COLUMN IF NOT EXISTS leave_override boolean DEFAULT false NOT NULL;`;
+    await sql`CREATE TABLE IF NOT EXISTS notifications (id text PRIMARY KEY, employee_id text NOT NULL REFERENCES employees(id) ON DELETE CASCADE, title text NOT NULL, message text NOT NULL, type text DEFAULT 'shift_appointment' NOT NULL, date text, read boolean DEFAULT false NOT NULL, metadata jsonb, created_at timestamp DEFAULT now() NOT NULL, updated_at timestamp DEFAULT now() NOT NULL);`;
+    await sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key text;`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_key_uidx ON notifications(dedupe_key) WHERE dedupe_key IS NOT NULL;`;
+    await sql`CREATE TABLE IF NOT EXISTS rate_limit_buckets (bucket_key text PRIMARY KEY, window_started_at timestamptz NOT NULL, request_count integer NOT NULL DEFAULT 0, expires_at timestamptz NOT NULL);`;
+    await sql`CREATE INDEX IF NOT EXISTS rate_limit_buckets_expiry_idx ON rate_limit_buckets(expires_at);`;
+
     // 3. Indexes
     await sql`CREATE INDEX IF NOT EXISTS idx_employees_pod_id ON employees(pod_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_brand_processes_brand ON brand_processes(brand_id);`;
