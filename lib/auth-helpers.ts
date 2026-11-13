@@ -1,7 +1,5 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
-import { neon } from "@neondatabase/serverless";
-import "@/lib/db/dns-patch";
 
 export interface AuthenticatedUser {
   id: string;
@@ -11,9 +9,9 @@ export interface AuthenticatedUser {
 }
 
 /**
- * Validates the caller's session and role. If a legacy employee/Pod Lead
- * account has no employee_id, link it only when exactly one active,
- * unclaimed employee record has the same normalized email address.
+ * Read the authenticated user's identity from the verified Auth.js session.
+ * Employee account linking is performed once during credentials sign-in;
+ * protected API requests must not each issue extra database queries.
  */
 export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | "employee">): Promise<{
   user?: AuthenticatedUser;
@@ -30,89 +28,35 @@ export async function requireAuth(allowedRoles?: Array<"manager" | "pod_lead" | 
     };
   }
 
-  try {
-    const sql = neon(process.env.DATABASE_URL!);
+  const sessionUser = session.user as typeof session.user & {
+    role?: "manager" | "pod_lead" | "employee";
+    employeeId?: string | null;
+  };
 
-    // Safe, unambiguous self-repair for older employee and Pod Lead accounts.
-    // The count guard prevents linking if zero or multiple records match.
-    await sql`
-      UPDATE users AS u
-      SET employee_id = (
-        SELECT e.id
-        FROM employees AS e
-        WHERE LOWER(TRIM(e.email)) = LOWER(TRIM(u.email))
-          AND e.active = true
-          AND NOT EXISTS (
-            SELECT 1
-            FROM users AS linked
-            WHERE linked.employee_id = e.id
-              AND linked.id <> u.id
-          )
-        LIMIT 1
-      )
-      WHERE u.id = ${session.user.id}
-        AND u.employee_id IS NULL
-        AND u.role IN ('employee', 'pod_lead')
-        AND (
-          SELECT COUNT(*)
-          FROM (
-            SELECT e.id
-            FROM employees AS e
-            WHERE LOWER(TRIM(e.email)) = LOWER(TRIM(u.email))
-              AND e.active = true
-              AND NOT EXISTS (
-                SELECT 1
-                FROM users AS linked
-                WHERE linked.employee_id = e.id
-                  AND linked.id <> u.id
-              )
-            LIMIT 2
-          ) AS matches
-        ) = 1;
-    `;
-
-    const rows = await sql`
-      SELECT u.id, u.email, u.role, u.employee_id, e.active AS employee_active
-      FROM users u
-      LEFT JOIN employees e ON e.id = u.employee_id
-      WHERE u.id = ${session.user.id}
-      LIMIT 1;
-    `;
-    const account = rows[0];
-
-    if (!account || (account.employee_id && account.employee_active !== true)) {
-      return {
-        errorResponse: NextResponse.json(
-          { error: "Your account is inactive or no longer available. Please sign in again." },
-          { status: 401 }
-        ),
-      };
-    }
-
-    const user: AuthenticatedUser = {
-      id: account.id,
-      email: account.email || "",
-      role: account.role,
-      employeeId: account.employee_id || null,
-    };
-
-    if (allowedRoles && !allowedRoles.includes(user.role)) {
-      return {
-        errorResponse: NextResponse.json(
-          { error: `Forbidden: role '${user.role}' lacks permission for this action` },
-          { status: 403 }
-        ),
-      };
-    }
-
-    return { user };
-  } catch (error) {
-    console.error("Authentication revalidation failed:", error);
+  if (!sessionUser.role) {
     return {
       errorResponse: NextResponse.json(
-        { error: "Unable to verify your account. Please try again." },
-        { status: 503 }
+        { error: "Your session is missing a role. Please sign out and sign in again." },
+        { status: 401 }
       ),
     };
   }
+
+  const user: AuthenticatedUser = {
+    id: sessionUser.id,
+    email: sessionUser.email || "",
+    role: sessionUser.role,
+    employeeId: sessionUser.employeeId || null,
+  };
+
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return {
+      errorResponse: NextResponse.json(
+        { error: `Forbidden: role '${user.role}' lacks permission for this action` },
+        { status: 403 }
+      ),
+    };
+  }
+
+  return { user };
 }
