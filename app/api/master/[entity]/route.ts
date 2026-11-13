@@ -4,8 +4,30 @@ import { neon } from "@neondatabase/serverless";
 import "@/lib/db/dns-patch";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
+import { beginTransaction } from "@/lib/db/transaction";
 
 export const dynamic = "force-dynamic";
+async function updatePodWithLeadership(connectionString: string, id: string, name: string, leadEmployeeId: string | null) {
+  const tx = await beginTransaction(connectionString);
+  try {
+    if (leadEmployeeId) {
+      const employee = await tx`SELECT id FROM employees WHERE id = ${leadEmployeeId} AND active = true LIMIT 1;`;
+      if (!employee.length) throw new Error("Selected pod lead does not exist.");
+    }
+    const prior = await tx`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1 FOR UPDATE;`;
+    if (!prior.length) throw new Error("Pod not found.");
+    const previousLeadId = prior[0].lead_employee_id as string | null;
+    await tx`UPDATE pods SET name = ${name}, lead_employee_id = ${leadEmployeeId}, updated_at = now() WHERE id = ${id};`;
+    if (previousLeadId && previousLeadId !== leadEmployeeId) {
+      const other = await tx`SELECT id FROM pods WHERE lead_employee_id = ${previousLeadId} AND id != ${id} LIMIT 1;`;
+      if (!other.length) await tx`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${previousLeadId} AND role = 'pod_lead';`;
+    }
+    if (leadEmployeeId) await tx`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${leadEmployeeId} AND role != 'manager';`;
+    await tx.commit();
+  } catch (error) { await tx.rollback(); throw error; }
+  finally { await tx.close(); }
+}
+
 
 const ALLOWED_ENTITIES = [
   "employees",
@@ -458,31 +480,10 @@ export async function PUT(
         }
         break;
         }
-      case "pods":
-        {
-          if (body.leadEmployeeId) {
-            const employee = await sql`SELECT id FROM employees WHERE id = ${body.leadEmployeeId} AND active = true LIMIT 1;`;
-            if (!employee.length) return NextResponse.json({ error: "Selected pod lead does not exist." }, { status: 400 });
-          }
-          const priorLead = await sql`SELECT lead_employee_id FROM pods WHERE id = ${id} LIMIT 1;`;
-          if (!priorLead.length) return NextResponse.json({ error: "Pod not found." }, { status: 404 });
-        await sql`UPDATE pods SET name = ${body.name}, lead_employee_id = ${body.leadEmployeeId || null}, updated_at = now() WHERE id = ${id};`;
-          if (priorLead[0].lead_employee_id && priorLead[0].lead_employee_id !== body.leadEmployeeId) {
-            const otherLedPods = await sql`
-              SELECT id FROM pods
-              WHERE lead_employee_id = ${priorLead[0].lead_employee_id}
-                AND id != ${id}
-              LIMIT 1;
-            `;
-            if (otherLedPods.length === 0) {
-              await sql`UPDATE users SET role = 'employee', updated_at = now() WHERE employee_id = ${priorLead[0].lead_employee_id} AND role = 'pod_lead';`;
-            }
-          }
-          if (body.leadEmployeeId) {
-            await sql`UPDATE users SET role = 'pod_lead', updated_at = now() WHERE employee_id = ${body.leadEmployeeId} AND role != 'manager';`;
-          }
-        }
+      case "pods": {
+        await updatePodWithLeadership(process.env.DATABASE_URL!, id, String(body.name), body.leadEmployeeId || null);
         break;
+      }
       case "brands":
         await sql`UPDATE brands SET name = ${String(body.name).trim()}, code = ${String(body.code).trim().toUpperCase()}, category = ${body.category || null}, active = ${body.active}, updated_at = now() WHERE id = ${id};`;
         break;
